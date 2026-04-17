@@ -75,6 +75,10 @@ class WebSocketManager {
       this.state.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          // Si el server nos da un ID de sesión, lo guardamos para reconexiones
+          if ((data.type === 'connected' || data.type === 'chat_switched') && data.sessionId) {
+            this.state.sessionId = data.sessionId;
+          }
           this.messageHandlers.forEach(handler => handler(data));
         } catch (e) {
           console.error('[WS] Error parseando mensaje', e);

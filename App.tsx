@@ -1,32 +1,29 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createDrawerNavigator } from '@react-navigation/drawer';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import ChatScreen from './src/screens/ChatScreen';
 
-const Drawer = createDrawerNavigator();
+const Stack = createNativeStackNavigator();
 
 export default function App() {
   return (
     <NavigationContainer>
       <StatusBar style="light" />
-      <Drawer.Navigator
+      <Stack.Navigator
         initialRouteName="Chat"
         screenOptions={{
           headerStyle: { backgroundColor: '#1e1e2e' },
           headerTintColor: '#cdd6f4',
-          drawerStyle: { backgroundColor: '#11111b' },
-          drawerActiveTintColor: '#89b4fa',
-          drawerInactiveTintColor: '#a6adc8',
+          headerTitleStyle: { fontWeight: 'bold' },
         }}
       >
-        <Drawer.Screen 
+        <Stack.Screen 
           name="Chat" 
           component={ChatScreen} 
           options={{ title: 'Eris Core' }}
         />
-        {/* Aquí luego inyectaremos dinámicamente los "Proyectos/Sesiones" del JSON */}
-      </Drawer.Navigator>
+      </Stack.Navigator>
     </NavigationContainer>
   );
 }

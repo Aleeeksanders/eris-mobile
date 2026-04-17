@@ -22,12 +22,21 @@ export default function ChatScreen() {
     
     // Suscribirse a los mensajes del backend WebSocket de Eris
     const unsubMsg = wsManager.subscribeMessage((payload) => {
-      if (payload.type === 'token') {
+      if (payload.type === 'connected' || payload.type === 'chat_switched') {
+        if (payload.history) {
+          const loaded = payload.history.map((m: any) => ({
+            id: m.id || Math.random().toString(),
+            role: m.role,
+            content: m.content,
+            isComplete: true
+          }));
+          setMessages(loaded);
+        }
+      } else if (payload.type === 'token') {
         setMessages((prev) => {
           let updated = [...prev];
           let lastMsg = updated[updated.length - 1];
           if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.isComplete) {
-            // New assistant stream
             lastMsg = { id: Math.random().toString(), role: 'assistant', content: payload.content, isComplete: false };
             updated.push(lastMsg);
           } else {
@@ -47,7 +56,19 @@ export default function ChatScreen() {
           }
           return updated;
         });
-      } else if (payload.type === 'done') {
+      } else if (payload.type === 'tool_call') {
+        setMessages((prev) => {
+          let updated = [...prev];
+          let lastMsg = updated[updated.length - 1];
+          const toolText = `\n🔧 [Herramienta: ${payload.name}...]`;
+          if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.isComplete) {
+            updated.push({ id: Math.random().toString(), role: 'assistant', content: toolText, isComplete: false });
+          } else {
+            lastMsg.content += toolText;
+          }
+          return updated;
+        });
+      } else if (payload.type === 'stream_end' || payload.type === 'done') {
         setMessages((prev) => {
            const updated = [...prev];
            const lastMsg = updated[updated.length - 1];
@@ -72,7 +93,7 @@ export default function ChatScreen() {
     const newMsg: ChatMessage = { id: Math.random().toString(), role: 'user', content: inputText.trim(), isComplete: true };
     setMessages((prev) => [...prev, newMsg]);
     
-    wsManager.sendMessage({ prompt: inputText.trim() });
+    wsManager.sendMessage({ type: 'message', content: inputText.trim() });
     setInputText('');
   };
 
