@@ -1,0 +1,30 @@
+Convención de nombres para assets de avatar (generados en PixAI):
+
+  {sex}_{tier}_{clase}_{vista}.png
+
+  sex   : h  (hombre) | m  (mujer)
+  tier  : T1 | T2 | T3 | T4 | T5
+  clase : base | calistenia | taekwondo | karate | boxeo |
+          atletismo | natacion | gimnasia | parkour | escalada | mma
+  vista : front | back
+
+Ejemplos:
+  h_T1_base_front.png
+  h_T2_calistenia_front.png
+  h_T2_calistenia_back.png
+  m_T3_taekwondo_front.png
+  h_T5_base_front.png
+
+Tamaños según la biblia:
+  Full body   768x1152  → estos archivos (front/back)
+  Retrato     512x512   → para card de perfil (futuro)
+  Chibi       256x256   → para iconos (futuro)
+
+Generación recomendada (mínimo viable):
+  - h_T1_base_front.png  (nivel 1-9 sin clase)
+  - h_T2_base_front.png  (nivel 10-29 sin clase)
+  - h_T3_base_front.png  (nivel 30-49)
+  - h_T4_base_front.png  (nivel 50-69)
+  - h_T5_base_front.png  (nivel 70-80 = TOJI)
+  + versiones _back para cada uno
+  + luego agregar variantes por clase según se elijan

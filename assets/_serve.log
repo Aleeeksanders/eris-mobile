@@ -1,0 +1,22 @@
+serving on 7788
+ENOENT: no such file or directory, open './favicon.ico'
+    path: "./favicon.ico",
+ syscall: "open",
+   errno: -2,
+    code: "ENOENT"
+
+GET - http://localhost:7788/favicon.ico failed
+ENOENT: no such file or directory, open './favicon.ico'
+    path: "./favicon.ico",
+ syscall: "open",
+   errno: -2,
+    code: "ENOENT"
+
+GET - http://localhost:7788/favicon.ico failed
+ENOENT: no such file or directory, open './avatars/h_T1_base_front.png'
+    path: "./avatars/h_T1_base_front.png",
+ syscall: "open",
+   errno: -2,
+    code: "ENOENT"
+
+GET - http://localhost:7788/avatars/h_T1_base_front.png failed

@@ -1,28 +1,49 @@
 {
   "expo": {
-    "name": "eris-mobile",
+    "name": "Eris",
     "slug": "eris-mobile",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#08080a"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Eris usa la cámara para escanear códigos de barras de alimentos y registrar su información nutricional."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#08080a"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "pan",
       "predictiveBackGestureEnabled": false,
-      "package": "com.aleeeksanders.erismobile"
+      "package": "com.aleeeksanders.erismobile",
+      "permissions": [
+        "android.permission.health.READ_SLEEP",
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_RESTING_HEART_RATE",
+        "android.permission.health.READ_STEPS",
+        "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+        "android.permission.health.READ_DISTANCE",
+        "android.permission.health.READ_OXYGEN_SATURATION",
+        "android.permission.health.READ_RESPIRATORY_RATE",
+        "android.permission.health.READ_VO2_MAX",
+        "android.permission.health.READ_EXERCISE",
+        "android.permission.health.READ_HEIGHT",
+        "android.permission.health.READ_WEIGHT",
+        "android.permission.health.READ_BLOOD_GLUCOSE",
+        "android.permission.VIBRATE",
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -31,6 +52,28 @@
       "eas": {
         "projectId": "5b983759-58b7-4cc3-8ce2-1c0dc628217a"
       }
-    }
+    },
+    "plugins": [
+      "react-native-health-connect",
+      "./plugins/withHealthConnectManifest.js",
+      "./plugins/withNFCManifest.js",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.860030727214-nqc6sm8o3v1fl5d2l2h63932an47r6dv"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
   }
 }
