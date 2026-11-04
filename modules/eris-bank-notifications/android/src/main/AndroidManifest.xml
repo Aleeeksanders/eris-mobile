@@ -1,0 +1,22 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- La tarea headless mantiene la CPU despierta los segundos que tarda en anotar (BankHeadlessService) -->
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <application>
+    <!--
+      Avisos del banco (Finanzas): lee las notificaciones SOLO para proponer gastos. Android lo activa únicamente si la
+      persona da el «Acceso a notificaciones» en Ajustes. Se guardan solo las de las apps que ella elija y que traen un
+      monto; de las demás, solo el nombre de la app (para ofrecerla). Nada sale del teléfono.
+    -->
+    <service
+      android:name="expo.modules.erisbanknotif.BankNotificationService"
+      android:label="Eris · avisos del banco"
+      android:exported="true"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
+    <!-- Eris administra: procesa los avisos con la app cerrada (tarea headless de JS, sin abrir pantallas) -->
+    <service android:name="expo.modules.erisbanknotif.BankHeadlessService" android:exported="false" />
+  </application>
+</manifest>

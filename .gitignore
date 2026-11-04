@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Compilados de los módulos nativos locales (revisión 2026-11-04: se colaban ~2.200 archivos)
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/

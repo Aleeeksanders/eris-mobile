@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- "Mostrar sobre otras apps": la burbuja de Eris flota encima de cualquier app -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+  <!-- Android exige un servicio en primer plano (con notificación) para mantener la burbuja viva fuera de la app -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+  <application>
+    <service
+      android:name="expo.modules.erisbubble.BubbleService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Burbuja flotante de acceso rápido a la asistente Eris, visible sobre otras apps mientras el usuario la mantenga activa" />
+    </service>
+  </application>
+</manifest>

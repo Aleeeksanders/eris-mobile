@@ -374,10 +374,8 @@ export default function GlucoTrackScreen() {
       {
         text: 'Eliminar', style: 'destructive',
         onPress: async () => {
-          const raw = await glucoSvc.getMealLog(30);
-          const filtered = raw.filter(e => e.id !== id);
-          const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
-          await AsyncStorage.setItem('gluco_meal_log', JSON.stringify(filtered));
+          // Solo esa comida (antes se guardaba lo de los últimos 30 días y se perdía todo lo anterior; revisión M2)
+          const filtered = await glucoSvc.deleteMeal(id);
           setMealLog(filtered.filter(e => {
             const cutoff = new Date(Date.now() - 1 * 24 * 3600 * 1000).toISOString();
             return e.timestamp > cutoff;

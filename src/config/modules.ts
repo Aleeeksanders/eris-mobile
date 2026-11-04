@@ -5,14 +5,16 @@ export interface ModuleConfig {
   description: string;
   status: 'available' | 'coming_soon';
   alwaysOn?: boolean;
+  /** Solo se puede activar cuando el administrador libera ese módulo (ver config/features.ts). */
+  requiresFeature?: 'glucose';
 }
 
 export const MODULES: ModuleConfig[] = [
   {
     id: 'pulso',
-    name: 'Pulso',
+    name: 'Inicio',
     icon: '◎',
-    description: 'Dashboard de salud y actividad diaria',
+    description: 'Tu día: qué hacer ahora y cómo vas',
     status: 'available',
     alwaysOn: true,
   },
@@ -35,12 +37,13 @@ export const MODULES: ModuleConfig[] = [
     id: 'glucosa',
     name: 'Glucosa',
     icon: '◈',
-    description: 'Lectura de sensor Libre 2 vía NFC',
+    description: 'Lectura de sensor de glucosa y alertas',
     status: 'available',
+    requiresFeature: 'glucose',
   },
   {
     id: 'nutri',
-    name: 'Nutri',
+    name: 'Nutrición',
     icon: '◐',
     description: 'Seguimiento nutricional y registro de comidas',
     status: 'available',
@@ -50,6 +53,13 @@ export const MODULES: ModuleConfig[] = [
     name: 'Finanzas',
     icon: '◇',
     description: 'Gestión inteligente de finanzas personales',
+    status: 'available',
+  },
+  {
+    id: 'inventario',
+    name: 'Inventario',
+    icon: '▣',
+    description: 'Lo que tienes en casa: lo que se vence, lo que se acaba y tu lista de compras',
     status: 'available',
   },
   {

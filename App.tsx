@@ -1,18 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Platform, DeviceEventEmitter, Animated, Dimensions, AppState } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { View, StyleSheet, StatusBar, DeviceEventEmitter, Animated, Dimensions, AppState, Easing, Keyboard, BackHandler, InteractionManager, Alert } from 'react-native';
+import { SAVE_FAILED_EVENT } from './src/services/saveGuard';
 import Svg, { Path, Rect, Circle, Line, Polyline } from 'react-native-svg';
 
-const SCREEN_H = Dimensions.get('window').height;
-import { NavigationContainer } from '@react-navigation/native';
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
+// Material "emphasized": arranca rápido y se posa suave al abrir; al cerrar acelera hacia la burbuja.
+const EASE_OPEN = Easing.bezier(0.2, 0, 0, 1);
+const EASE_CLOSE = Easing.bezier(0.3, 0, 0.8, 0.15);
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
+import { pedirDestino } from './src/services/notifTargets';
+import { modulosOn, respuestaApagado } from './src/services/modulosOn';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import * as Notifications from 'expo-notifications';
 import { AuthStorage } from './src/services/AuthStorage';
 import { wsManager } from './src/services/WebSocketManager';
 import { metricsService } from './src/services/MetricsService';
+import { nutritionBackend } from './src/services/NutritionBackend';
 import { proactiveService } from './src/services/ProactiveService';
 import { ModuleStorage } from './src/services/ModuleStorage';
+import WelcomeFlow, { WELCOME_EVENT } from './src/screens/WelcomeFlow';
+import { tourRef, TOUR_EVENT } from './src/components/tour/tourTargets';
 import { DEFAULT_MODULES } from './src/config/modules';
 import { T } from './src/config/design';
 
@@ -23,13 +31,88 @@ import ChatScreen from './src/screens/ChatScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import GlucoTrackScreen from './src/screens/GlucoTrackScreen';
 import NutritionScreen from './src/screens/NutritionScreen';
-import TojiScreen from './src/screens/TojiScreen';
-import HunterWalletScreen from './src/screens/HunterWalletScreen';
+import ForgeScreen from './src/screens/forge/ForgeScreen';
+// Finanzas 2.0 (nativa); la versión web (HunterWalletScreen) queda adentro como respaldo si la migración no calza
+import FinanceScreen from './src/screens/finance/FinanceScreen';
+import { FinanceHeadlessHost } from './src/components/FinanceHeadlessHost';
+// Inventario (2026-10-22, fase I2): lo que tienes en casa, con su portal propio como Forge y Finanzas
+import InventoryScreen from './src/screens/inventory/InventoryScreen';
+import SleepScreen from './src/screens/sleep/SleepScreen';
+import { inventoryStore, startInventory } from './src/services/inventory/inventoryStore';
+import { startInventoryAuto } from './src/services/inventory/inventoryAuto';
+import { startFinanceAuto } from './src/services/finance/financeAuto';
+import { startAutoPrefs } from './src/services/autoPrefs';
+import { limpiarViejos } from './src/services/storagePrune';
+import { supplementStore, startSupplements } from './src/services/supplements/supplementStore';
+import { startStrictModeSync } from './src/services/strictMode';
+import { financeBridge } from './src/services/FinanceBridge';
 import { PortalOverlay, type PortalPhase } from './src/components/PortalOverlay';
-import { ErisFAB } from './src/components/ErisFAB';
+import { ErisFAB, getErisBubbleCenter, BUBBLE_SIZE } from './src/components/ErisFAB';
+import { preloadModuleHtml } from './src/services/ModuleHtml';
+import { tintForTab } from './src/config/moduleTheme';
+import { ErisBubble } from './modules/eris-bubble';
+import { ApprovalHost } from './src/components/ApprovalHost';
+import { evaluateFromSnapshot } from './src/services/NutritionQuality';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { PersonaStore, usePersona } from './src/config/persona';
+import { AppModeStore, APP_MODE_EVENT, isAdminRole, type AppMode } from './src/config/appMode';
+import { EnterprisePanel, EnterpriseProjects, EnterprisePending, EnterpriseSystem } from './src/screens/EnterpriseScreens';
+import { FeatureStore, useFeature } from './src/config/features';
+import { erisNotifications, NOTIFICATION_OPEN_EVENT, PLAN_REFRESH_EVENT, ERIS_ASK_EVENT, type NotificationOpen } from './src/services/ErisNotifications';
+import { reminderPlanner } from './src/services/ReminderPlanner';
+import { dayPlanStore } from './src/services/dayPlan/dayPlanStore';
+import { startToneSync } from './src/services/tone';
+import { startFinanceNative } from './src/services/finance/financeContext';
+import { installForgeSync } from './src/services/forge/forgeSync';
+import { installTrainingIntent } from './src/services/forge/trainingIntent';
+import { daySchedule, DAY_SCHEDULE_EVENT } from './src/services/daySchedule';
+import { SLEEP_EDITS_EVENT } from './src/services/sleep/sleepStore';
+import { foodSearchService } from './src/services/FoodSearchService';
+import { PROFILE_CHANGED_EVENT } from './src/services/ScopedStorage';
+
+// Otra cuenta en el teléfono: «mis versiones» de comidas son de cada cuenta (revisión 2026-10-31, D4; acá y no en el
+// servicio, que no importa React Native para poder probarlo)
+DeviceEventEmitter.addListener(PROFILE_CHANGED_EVENT, () => foodSearchService.olvidarCuenta());
+
+// El horario de la persona (día de comida que termina al dormir, comidas según su hora de despertar): lo antes posible
+daySchedule.load();
+
+/**
+ * Manda el snapshot de salud a Eris junto con la calidad de lo comido hoy según la hora de cada comida (NutritionQuality):
+ * así Eris puede decir "tu almuerzo fue D: sin verduras" en vez de solo sumar calorías. Si la evaluación falla, igual
+ * se manda el snapshot.
+ */
+async function sendHealthSnapshot(snap: any) {
+  let foodQuality: any;
+  try {
+    const q = await evaluateFromSnapshot(snap);
+    foodQuality = {
+      at: new Date().toISOString(), score: q.foodScore, letter: q.letter, hydrationScore: q.hydrationScore,
+      expectedSharePct: Math.round(q.expectedShare * 100), headline: q.headline, tips: q.tips,
+      meals: q.meals.map((m) => ({ label: m.label, letter: m.letter, kcal: m.kcal, notes: m.notes })),
+    };
+  } catch {}
+  // Los alimentos de hoy uno por uno (lo anotado a mano incluido): antes Eris solo veía el total y no qué fue
+  let foodLog: any;
+  try { foodLog = await nutritionBackend.todayFoodLog(); } catch {}
+  // Qué tomas de agua del chat ya están en `hydration`: el servidor suma solo las que faltan (una sola cuenta del agua)
+  let chatWaterCounted: string[] | undefined;
+  try { chatWaterCounted = await nutritionBackend.chatWaterCounted(snap); } catch {}
+  // `hydration` del snapshot combinado trae el agua de la comida; al servidor va solo lo bebido: él suma el agua de la comida
+  // con la lista de alimentos (si no, se contaría dos veces) y su historial diario guarda solo lo bebido
+  const drank = typeof snap?.hydration === 'number' ? Math.round((snap.hydration - (snap.foodWaterL ?? 0)) * 100) / 100 : snap?.hydration;
+  wsManager.sendMessage({ type: 'update_health_snapshot', snapshot: {
+    // El despertar habitual (Perfil o reloj): con esto y el fin del sueño (dayWakeTime) el servidor calcula el mismo día
+    ...snap, hydration: drank, schedule: { usualWake: daySchedule.usualWake(), sleepHours: daySchedule.sleepHours() }, ...(foodQuality ? { foodQuality } : {}), ...(foodLog ? { foodLog } : {}), ...(chatWaterCounted ? { chatWaterCounted } : {}),
+  } });
+}
 
 // ─── Tab Navigator ──────────────────────────────────────────
+/** Lo que se lee en la barra de abajo (2026-10-10: "Dashboard" y "Nutri" eran nombres de creador, no de usuario). */
+const TAB_LABELS: Record<string, string> = { Dashboard: 'Inicio', Nutri: 'Nutrición' };
 const Tab = createBottomTabNavigator();
+/** Para que una notificación lleve a una pestaña (revisión I2: antes «Ver mi día» o «Ver» solo abrían la app) */
+const navRef = createNavigationContainerRef<any>();
 
 // ─── SVG Tab Icons ──────────────────────────────────────────
 const IC = 20; // icon size
@@ -38,8 +121,8 @@ const SW = 1.7; // stroke width
 function SvgTabIcon({ name, focused }: { name: string; focused: boolean }) {
   const c = focused ? '#22d3ee' : '#4b5563';
   switch (name) {
-    // ── Pulso / SYS — ECG heartbeat ─────────────────────────
-    case 'Pulso':
+    // ── Dashboard / SYS — ECG heartbeat ─────────────────────
+    case 'Dashboard':
     case 'SYS':
       return (
         <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
@@ -101,6 +184,51 @@ function SvgTabIcon({ name, focused }: { name: string; focused: boolean }) {
           <Circle cx="16.5" cy="14.5" r="1.5" fill={c} />
         </Svg>
       );
+    // ── Inventario / INV — caja ──────────────────────────────
+    case 'Inventario':
+    case 'INV':
+      return (
+        <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
+          <Path d="M3 7.8L12 3.5L21 7.8V16.4L12 20.6L3 16.4V7.8Z" stroke={c} strokeWidth={SW} strokeLinejoin="round" />
+          <Path d="M3 7.8L12 12L21 7.8" stroke={c} strokeWidth={SW} strokeLinejoin="round" />
+          <Line x1="12" y1="12" x2="12" y2="20.6" stroke={c} strokeWidth={SW} />
+          <Line x1="7.5" y1="5.6" x2="16.5" y2="10" stroke={c} strokeWidth={SW - 0.4} strokeLinecap="round" />
+        </Svg>
+      );
+    // ── Modo Empresa ─────────────────────────────────────────
+    case 'Panel':
+      return (
+        <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
+          <Rect x="3" y="3" width="8" height="8" rx="2" stroke={c} strokeWidth={SW} />
+          <Rect x="13" y="3" width="8" height="5" rx="2" stroke={c} strokeWidth={SW} />
+          <Rect x="13" y="10" width="8" height="11" rx="2" stroke={c} strokeWidth={SW} />
+          <Rect x="3" y="13" width="8" height="8" rx="2" stroke={c} strokeWidth={SW} />
+        </Svg>
+      );
+    case 'Proyectos':
+      return (
+        <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
+          <Path d="M3 7C3 5.9 3.9 5 5 5H9.5L11.5 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z"
+            stroke={c} strokeWidth={SW} strokeLinejoin="round" />
+        </Svg>
+      );
+    case 'Pendientes':
+      return (
+        <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
+          <Rect x="3.5" y="4" width="5" height="5" rx="1.2" stroke={c} strokeWidth={SW} />
+          <Line x1="11.5" y1="6.5" x2="20.5" y2="6.5" stroke={c} strokeWidth={SW} strokeLinecap="round" />
+          <Rect x="3.5" y="14" width="5" height="5" rx="1.2" stroke={c} strokeWidth={SW} />
+          <Line x1="11.5" y1="16.5" x2="20.5" y2="16.5" stroke={c} strokeWidth={SW} strokeLinecap="round" />
+        </Svg>
+      );
+    case 'Sistema':
+      return (
+        <Svg width={IC} height={IC} viewBox="0 0 24 24" fill="none">
+          <Rect x="3" y="4" width="18" height="12" rx="2" stroke={c} strokeWidth={SW} />
+          <Line x1="8" y1="20" x2="16" y2="20" stroke={c} strokeWidth={SW} strokeLinecap="round" />
+          <Line x1="12" y1="16" x2="12" y2="20" stroke={c} strokeWidth={SW} />
+        </Svg>
+      );
     // ── Perfil / ID — person ─────────────────────────────────
     case 'Perfil':
     case 'ID':
@@ -131,45 +259,72 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const [snapshot, setSnapshot] = useState(metricsService.getEmptySnapshot());
   const [axsMode, setAxsMode] = useState(false);
+  // Modo Empresa (solo administradores): el menú de trabajo de AXS, con Hestia. Implica axsMode. Ver config/appMode.ts
+  const [enterprise, setEnterprise] = useState(false);
   const [enabledModules, setEnabledModules] = useState<string[]>(DEFAULT_MODULES);
-  const pendingChatMsg = useRef<string | undefined>(undefined);
-  const pendingTojiMsg = useRef<string | null>(null);
-  const walletPendingMsg = useRef<string | undefined>(undefined);
-  const tojiExitAction = useRef<'exit' | 'chat' | 'eris'>('exit');
+  // Bienvenida de 1 minuto (la primera vez de cada perfil; el creador la ve desde Perfil)
+  const [welcome, setWelcome] = useState(false);
+  // En el Modo AXS Executive la asistente es Hestia (nombre, ícono, colores); fuera de él, Eris. Ver config/persona.ts
+  const persona = usePersona();
   const [tojiPhase, setTojiPhase] = useState<PortalPhase>('hidden');
   const [walletPhase, setWalletPhase] = useState<PortalPhase>('hidden');
+  // Forge y Finanzas quedan montados (ocultos) después de la primera apertura —o de la precarga tras el inicio—
+  // para que entrar sea instantáneo; el portal espera a que avisen que están listos.
+  const [tojiMounted, setTojiMounted] = useState(false);
+  const [walletMounted, setWalletMounted] = useState(false);
+  const [sleepOpen, setSleepOpen] = useState(false);
+  const [tojiReady, setTojiReady] = useState(false);
+  const [walletReady, setWalletReady] = useState(false);
+  // Inventario: igual que Finanzas (montado y oculto tras la primera apertura)
+  const [invPhase, setInvPhase] = useState<PortalPhase>('hidden');
+  const [invMounted, setInvMounted] = useState(false);
+  const [invReady, setInvReady] = useState(false);
+  // Pestaña en pantalla → color de la nube del ícono de Eris (ver moduleTheme)
+  const [activeTab, setActiveTab] = useState<string | undefined>(undefined);
   const [erisOpen, setErisOpen] = useState(false);
   const [erisEverOpened, setErisEverOpened] = useState(false);
   const [erisInitMsg, setErisInitMsg] = useState<string | undefined>(undefined);
-  const erisSlide = useRef(new Animated.Value(SCREEN_H)).current;
+  // 0 = chat cerrado (dentro de la burbuja), 1 = chat a pantalla completa.
+  // Un solo valor maneja el círculo, el fondo, el contenido y la propia burbuja,
+  // así todo queda sincronizado sin timers.
+  const erisProgress = useRef(new Animated.Value(0)).current;
+  const [morphAnchor, setMorphAnchor] = useState(getErisBubbleCenter());
+  const [morphing, setMorphing] = useState(false);
 
   // Portal de inicio (se dispara la primera vez que authed=true por sesión)
   const [introPhase, setIntroPhase] = useState<PortalPhase>('hidden');
   const introFired = useRef(false);
-  // Portal Toji→Eris (se dispara al navegar de Toji a Eris)
-  const [erisIntroPhase, setErisIntroPhase] = useState<PortalPhase>('hidden');
 
   useEffect(() => {
     // Restaurar sesión guardada y verificar con el servidor
-    AuthStorage.getCredentials().then(creds => {
+    AuthStorage.getSession().then(async creds => {
       if (creds) {
-        // Conectamos para verificar que las credenciales siguen siendo válidas
-        wsManager.setCredentials(creds.profileId, creds.pin);
+        // Reconectamos con el token de sesión de Google para verificar que sigue vigente
+        wsManager.setCredentials(creds.profileId);
+        wsManager.setAuth({ session: creds.token });
         wsManager.connect();
 
-        // Esperar confirmación del servidor
-        const timeout = setTimeout(() => {
-          unsub();
-          // Si no hay respuesta en 8s, mostramos login (servidor apagado)
-          setChecking(false);
-        }, 8000);
+        // Se entra AL TIRO con la sesión guardada; la verificación corre por detrás. Antes se esperaba al servidor
+        // y, si no respondía en 8 s (PC apagado o lejos), se mostraba el login como si te hubiera deslogueado.
+        // Sin servidor la app funciona igual (Finanzas, Forge y Nutrición son locales) y se reconecta sola.
+        try {
+          const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
+          const [axsVal, modules, entVal] = await Promise.all([
+            AsyncStorage.getItem(`eris_axs_mode_${creds.profileId}`),
+            ModuleStorage.get(creds.profileId),
+            AsyncStorage.getItem(`eris_enterprise_mode_${creds.profileId}`),
+          ]);
+          setAxsMode(axsVal !== null ? JSON.parse(axsVal) : false);
+          setEnterprise(entVal === 'true');
+          setEnabledModules(modules);
+        } catch {}
+        setAuthed(true);
+        setChecking(false);
 
-        const unsub = wsManager.subscribeMessage((data) => {
+        // Solo un rechazo EXPLÍCITO de la sesión devuelve al login
+        const unsub = wsManager.subscribeMessage(async (data) => {
           if (data.type === 'connected') {
-            clearTimeout(timeout);
             unsub();
-            setAuthed(true);
-            setChecking(false);
           } else if (
             // El servidor siempre envía 'error' para fallos de auth (nunca 'auth_error' ni 'auth_blocked')
             data.type === 'auth_error' ||
@@ -180,11 +335,10 @@ export default function App() {
               data.message.toLowerCase().includes('incorrecto')
             ))
           ) {
-            clearTimeout(timeout);
             unsub();
             AuthStorage.clearCredentials();
             wsManager.disconnect();
-            setChecking(false);
+            setAuthed(false);
           }
         });
       } else {
@@ -192,15 +346,24 @@ export default function App() {
       }
     });
 
+    // No se pudo guardar en el teléfono (memoria llena, almacenamiento con error): se avisa una vez por módulo y sesión, en
+    // vez de mostrar un cambio que al reiniciar no estaría (revisión 2026-10-31, D5)
+    const avisados = new Set<string>();
+    const subSave = DeviceEventEmitter.addListener(SAVE_FAILED_EVENT, (e: { modulo?: string }) => {
+      const m = String(e?.modulo ?? 'la app');
+      if (avisados.has(m)) return;
+      avisados.add(m);
+      Alert.alert('No pude guardar en el teléfono', `Tus últimos cambios de ${m} no quedaron guardados en este teléfono (¿poco espacio?). Libera espacio y vuelve a intentarlo; mientras, no cierres la app.`);
+    });
+
     // Escuchar expulsiones de sesión en tiempo real y alertas de glucosa
     const unsubGlobal = wsManager.subscribeMessage((data) => {
       if (
         data.type === 'auth_error' ||
         data.type === 'session_expired' ||
-        (data.type === 'error' && data.message && (
-          data.message.toLowerCase().includes('pin') ||
-          data.message.toLowerCase().includes('bloqueado')
-        ))
+        // Solo con el código del servidor (revisión 2026-10-31, S3): antes bastaba que un error dijera «pin» o «bloqueado»
+        // (también «opinión» o un error de una herramienta) para borrar la sesión
+        (data.type === 'error' && data.code === 'auth_failed')
       ) {
         AuthStorage.clearCredentials();
         wsManager.disconnect();
@@ -208,58 +371,153 @@ export default function App() {
         return;
       }
 
-      if (data.type === 'glucose_alert') {
-        const { alertType, value, valueInMmol, trend } = data;
-        const isUrgent = alertType === 'urgent_low' || alertType === 'urgent_high';
-        const emoji = alertType === 'urgent_low' ? '🔴' : alertType === 'urgent_high' ? '🔴' : '🟡';
-        const label = alertType === 'urgent_low' ? 'GLUCOSA CRÍTICA BAJA'
-          : alertType === 'urgent_high' ? 'GLUCOSA CRÍTICA ALTA'
-          : alertType === 'low' ? 'Glucosa baja'
-          : 'Glucosa alta';
-        Notifications.scheduleNotificationAsync({
-          content: {
-            title: `${emoji} ${label}`,
-            body: `${value} mg/dL (${valueInMmol} mmol/L) ${trend ?? ''}`,
-            sound: true,
-            priority: isUrgent
-              ? Notifications.AndroidNotificationPriority.MAX
-              : Notifications.AndroidNotificationPriority.HIGH,
-          },
-          trigger: null,
-        }).catch(() => {});
+      // Módulos con visto bueno del administrador (p. ej. glucosa): al conectar y cuando él los cambia
+      if ((data.type === 'connected' || data.type === 'features_updated') && data.features) FeatureStore.set(data.features, data.type === 'connected' ? (data.role ?? null) : undefined);
+
+      // Alerta del sensor: canal propio (urgente o normal), qué hacer ya y un botón para pedirle ayuda a Eris.
+      // Solo con el módulo de glucosa aprobado (el servidor tampoco las manda sin él).
+      if (data.type === 'glucose_alert' && FeatureStore.get().glucose) {
+        erisNotifications.glucose({ alertType: data.alertType, value: data.value, trend: data.trend }).catch(() => {});
+      }
+
+      // Eris anota algo en Finanzas por chat: se aplica en el teléfono y vuelve el resultado real (FinanceBridge)
+      if (data.type === 'finance_op' && data.requestId) {
+        // Apagado en Perfil (revisión A2): no se anota nada y Eris lo dice
+        if (!modulosOn.on('finanzas') && data.op?.action !== 'cuadre') { wsManager.sendMessage({ type: 'finance_op_result', requestId: data.requestId, result: respuestaApagado('Finanzas') }); return; }
+        financeBridge.run(data.op).then((result) => {
+          wsManager.sendMessage({ type: 'finance_op_result', requestId: data.requestId, result });
+        });
+      }
+      // …y lo mismo con el Inventario (InventoryBridge): «compré 2 L de leche», «¿tengo arroz?»
+      if (data.type === 'inventory_op' && data.requestId) {
+        if (!modulosOn.on('inventario')) { wsManager.sendMessage({ type: 'inventory_op_result', requestId: data.requestId, result: respuestaApagado('Inventario') }); return; }
+        inventoryStore.apply(data.op)
+          .catch((e) => ({ ok: false, code: 'error', msg: `Inventario no pudo: ${String(e?.message ?? e)}` }))
+          .then((result) => { wsManager.sendMessage({ type: 'inventory_op_result', requestId: data.requestId, result }); });
+      }
+      // …y con «Mis suplementos» (SupplementBridge): «me tomé la creatina», «¿me tomé la vitamina D?»
+      if (data.type === 'supplement_op' && data.requestId) {
+        supplementStore.apply(data.op)
+          .catch((e) => ({ ok: false, code: 'error', msg: `Suplementos no pudo: ${String(e?.message ?? e)}` }))
+          .then((result) => { wsManager.sendMessage({ type: 'supplement_op_result', requestId: data.requestId, result }); });
       }
     });
 
     // Inicializar métricas y servicio proactivo en background
     metricsService.init().then(async () => {
-      const snap = await metricsService.getSnapshot();
+      // Una vez al día: a qué hora despiertas normalmente según el reloj (para quien trasnocha o trabaja de noche)
+      daySchedule.refreshUsual(() => metricsService.readUsualWake(21)).catch(() => {});
+      const snap = await nutritionBackend.merge(await metricsService.getSnapshot());
       setSnapshot(snap);
-      wsManager.sendMessage({ type: 'update_health_snapshot', snapshot: snap });
+      sendHealthSnapshot(snap);
+      proactiveService.requestTip();
     });
-    proactiveService.init();
+    erisNotifications.init().catch(() => {});
+    proactiveService.init().then(() => DeviceEventEmitter.emit(PLAN_REFRESH_EVENT));
 
     // Re-verificar permisos HC y disparar reglas proactivas al volver al foreground
     const appStateSub = AppState.addEventListener('change', async (nextState) => {
       if (nextState === 'active') {
         const restored = await metricsService.refreshPermissions();
-        const snap = restored ? await metricsService.getSnapshot() : null;
+        const snap = restored ? await nutritionBackend.merge(await metricsService.getSnapshot()) : null;
         if (restored && snap) {
           setSnapshot(snap);
-          wsManager.sendMessage({ type: 'update_health_snapshot', snapshot: snap });
+          sendHealthSnapshot(snap);
         }
-        proactiveService.check(snap ?? metricsService.getEmptySnapshot());
+        proactiveService.requestTip();
       }
     });
 
     // Cargar AXS Mode y módulos — se recargarán por perfil en handleLogin
     const subAxs = DeviceEventEmitter.addListener('AXS_MODE_CHANGED', (val: boolean) => {
       setAxsMode(val);
+      // Al prender o apagar el Modo AXS Executive se llega a Hestia (o a Eris); el menú AXS se elige en el Dashboard de Hestia
+      setEnterprise(false);
+      AuthStorage.getCredentials().then((c) => { if (c?.profileId) AsyncStorage.setItem(`eris_enterprise_mode_${c.profileId}`, 'false'); }).catch(() => {});
     });
     const subModules = DeviceEventEmitter.addListener('MODULES_CHANGED', (val: string[]) => {
       setEnabledModules(val);
     });
 
-    return () => { unsubGlobal(); appStateSub.remove(); subAxs.remove(); subModules.remove(); };
+    return () => { unsubGlobal(); appStateSub.remove(); subAxs.remove(); subModules.remove(); subSave.remove(); };
+  }, []);
+
+  // Lo de nutrición que sabe el servidor (chat) se combina con Health Connect sin contar doble; ver services/NutritionBackend.ts
+  useEffect(() => {
+    if (!authed) { nutritionBackend.stop(); reminderPlanner.stop(); return; }
+    nutritionBackend.start();
+    reminderPlanner.start(); // avisos del día: comidas, agua, entreno, Finanzas y resúmenes (services/reminderRules.ts)
+    dayPlanStore.start(); // «¿Qué recomienda Eris?»: el plan del día que arma Eris (Inicio y chat)
+    const offTone = startToneSync(); // el tono elegido (services/tone.ts) llega al servidor al conectar: chat y sugerencias
+    startFinanceNative(); // Finanzas 2.0: lo que sabe Eris sale del núcleo nativo, y los fijos del día se anotan al abrir
+    startInventory(); // Inventario: Eris sabe qué tienes en casa, y cada cambio se respalda en el PC
+    startInventoryAuto(); // …y se mantiene solo: lo que comes sale de la despensa y los remedios bajan con sus tomas
+    startFinanceAuto(); // Eris administra: lo que avisa tu banco se anota solo (o queda «Por confirmar»), sin abrir Finanzas
+    startAutoPrefs(); // Eris administra (A3): lo que Eris hace sola en cada módulo llega al servidor (el chat y el Plan lo respetan)
+    void limpiarViejos(); // revisión D6: lo del día a día de hace más de 120 días se borra (una vez al día)
+    startSupplements(); // «Mis suplementos»: Eris sabe qué tomas hoy, y los avisos de cada toma quedan programados
+    startStrictModeSync(); // el modo estricto con los antojos (Perfil) llega al servidor al conectar
+    installTrainingIntent(); // Forge 2.0: «¿entrenas hoy?» y las metas según el día
+    installForgeSync(); // Forge 2.0: lo de Forge nativo llega al servidor, a los avisos y al respaldo; lo que arma Eris se aplica al tiro
+    const off = nutritionBackend.subscribe(async () => {
+      const snap = await nutritionBackend.merge(await metricsService.getSnapshot());
+      setSnapshot(snap);
+      // El total completo del día (Health Connect + chat) vuelve al servidor: su "Análisis del Día" se armaba con lo
+      // que escribiera último, y un registro por chat lo dejaba viendo solo lo del chat (sin lo anotado a mano).
+      sendHealthSnapshot(snap);
+    });
+    // Cambió el horario (despertó, o lo fijó en Perfil): los avisos del día y el servidor se ponen al día
+    const offDay = DeviceEventEmitter.addListener(DAY_SCHEDULE_EVENT, async () => {
+      reminderPlanner.schedule();
+      try { const snap = await nutritionBackend.merge(await metricsService.getSnapshot()); sendHealthSnapshot(snap); } catch {}
+    });
+    // Corrigió el sueño en la pantalla de Sueño («no estaba durmiendo» / «anotar a mano»): el día y el servidor se rehacen
+    const offSleep = DeviceEventEmitter.addListener(SLEEP_EDITS_EVENT, async () => {
+      try { const snap = await nutritionBackend.merge(await metricsService.getSnapshot()); setSnapshot(snap); sendHealthSnapshot(snap); } catch {}
+    });
+    return () => { off(); offDay.remove(); offSleep.remove(); offTone(); };
+  }, [authed]);
+
+  // La bienvenida: solo para quien recién empieza (lo decide el servidor: nunca la vio y aún no conversa con Eris), una
+  // vez, cuando terminó el portal de inicio. A los administradores no se les muestra sola. Se marca vista AL MOSTRARLA (en
+  // el teléfono y en el perfil del servidor): antes se marcaba al terminarla y, si se cerraba a medias, salía de nuevo, y a
+  // quien ya usaba la app le salía al actualizar (2026-10-11).
+  useEffect(() => {
+    if (!authed || introPhase !== 'hidden' || !introFired.current) return;
+    let cancelled = false;
+    let off: (() => void) | null = null;
+    (async () => {
+      const pid = (await AuthStorage.getCredentials())?.profileId;
+      const key = `eris_welcome_done_${pid}`;
+      if (!pid || (await AsyncStorage.getItem(key))) return;
+      const decide = (d: any) => {
+        if (cancelled) return;
+        // Servidor anterior sin el dato: como antes (por teléfono)
+        const show = typeof d?.showWelcome === 'boolean' ? d.showWelcome : true;
+        if (!show || isAdminRole(d?.role)) { if (!show) AsyncStorage.setItem(key, '1').catch(() => {}); return; }
+        setWelcome(true);
+        AsyncStorage.setItem(key, '1').catch(() => {});
+        wsManager.sendMessage({ type: 'welcome_done' });
+      };
+      const last = wsManager.getLastConnectedPayload();
+      if (last?.role) { decide(last); return; }
+      // Sin conexión todavía: se espera. Sin saber si es nuevo, no se muestra (se decide la próxima vez que abra).
+      off = wsManager.subscribeMessage((d: any) => { if (d?.type === 'connected') decide(d); }) as any;
+    })().catch(() => {});
+    return () => { cancelled = true; off?.(); };
+  }, [authed, introPhase]);
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(WELCOME_EVENT, () => setWelcome(true));
+    return () => sub.remove();
+  }, []);
+  const finishWelcome = useCallback(async (modules: string[]) => {
+    setWelcome(false);
+    setEnabledModules(modules);
+    DeviceEventEmitter.emit('MODULES_CHANGED', modules);
+    const pid = (await AuthStorage.getCredentials())?.profileId;
+    if (pid) { await ModuleStorage.set(pid, modules).catch(() => {}); await AsyncStorage.setItem(`eris_welcome_done_${pid}`, '1').catch(() => {}); }
+    // Y enseguida, el recorrido guiado por la app (las pestañas se rearman con los módulos elegidos: se espera un poco)
+    setTimeout(() => DeviceEventEmitter.emit(TOUR_EVENT), 1200);
   }, []);
 
   // Disparar portal de inicio la primera vez que authed=true en esta sesión
@@ -270,29 +528,66 @@ export default function App() {
     }
   }, [authed]);
 
+  // Al cerrar sesión o cambiar de cuenta, Forge y Finanzas (vivos y ocultos) se desmontan: eran del perfil anterior
+  const resetModules = useCallback(() => {
+    setTojiMounted(false); setWalletMounted(false); setInvMounted(false);
+    setTojiReady(false); setWalletReady(false); setInvReady(false);
+  }, []);
+  useEffect(() => { if (!authed) resetModules(); }, [authed]);
+
+  // Terminada la animación de inicio: se precarga el HTML de los módulos y, con la app ya quieta, se montan Forge y
+  // Finanzas ocultos. Así la PRIMERA apertura también es instantánea (el portal ni siquiera tiene que esperar).
+  useEffect(() => {
+    if (!authed || introPhase !== 'hidden' || !introFired.current) return;
+    preloadModuleHtml();
+    const t = setTimeout(() => {
+      InteractionManager.runAfterInteractions(() => {
+        if (axsMode || enabledModules.includes('finanzas')) setWalletMounted(true);
+        if (axsMode || enabledModules.includes('toji')) setTojiMounted(true);
+        if (axsMode || enabledModules.includes('inventario')) setInvMounted(true);
+      });
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [authed, introPhase, axsMode, enabledModules]);
+
   // Login: la conexión ya fue establecida y verificada por LoginScreen
   const handleLogin = async (profileId: string, _pin: string) => {
     const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
-    const [axsVal, modules] = await Promise.all([
+    const [axsVal, modules, entVal] = await Promise.all([
       AsyncStorage.getItem(`eris_axs_mode_${profileId}`),
       ModuleStorage.get(profileId),
+      AsyncStorage.getItem(`eris_enterprise_mode_${profileId}`),
     ]);
     setAxsMode(axsVal !== null ? JSON.parse(axsVal) : false);
+    setEnterprise(entVal === 'true');
     setEnabledModules(modules);
     setAuthed(true);
   };
 
   const handleLogout = async () => {
+    FeatureStore.reset();
     introFired.current = false;
     setIntroPhase('hidden');
-    setErisIntroPhase('hidden');
     setAxsMode(false);
+    setEnterprise(false);
     setEnabledModules(DEFAULT_MODULES);
     setErisOpen(false);
     setErisEverOpened(false);
     setTojiPhase('hidden');
     setWalletPhase('hidden');
-    erisSlide.setValue(SCREEN_H);
+    resetModules();
+    erisProgress.setValue(0);
+    // Cerrar sesión de verdad: el token deja de valer en el servidor y se olvida la cuenta de Google del teléfono
+    const token = wsManager.getSessionToken();
+    if (token) {
+      try { wsManager.sendMessage({ type: 'logout', token }); } catch {}
+      await new Promise(r => setTimeout(r, 300));
+    }
+    wsManager.setAuth({});
+    try {
+      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+      await GoogleSignin.signOut();
+    } catch {}
     await AuthStorage.clearCredentials();
     wsManager.disconnect();
     setAuthed(false);
@@ -301,37 +596,212 @@ export default function App() {
   const handleSwitchAccount = () => {
     introFired.current = false;
     setIntroPhase('hidden');
-    setErisIntroPhase('hidden');
     setAxsMode(false);
+    setEnterprise(false);
     setEnabledModules(DEFAULT_MODULES);
     setErisEverOpened(false);
     setTojiPhase('hidden');
     setWalletPhase('hidden');
-    erisSlide.setValue(SCREEN_H);
+    resetModules();
+    erisProgress.setValue(0);
     wsManager.disconnect();
     setAuthed(false);
   };
 
   const openEris = useCallback((msg?: string) => {
     if (msg !== undefined) setErisInitMsg(msg);
+    setMorphAnchor(getErisBubbleCenter());
     setErisEverOpened(true);
     setErisOpen(true);
-    Animated.spring(erisSlide, { toValue: 0, tension: 65, friction: 12, useNativeDriver: true }).start();
-  }, [erisSlide]);
+    setMorphing(true);
+    // Un frame de espera: el círculo necesita renderizarse ya ubicado en la
+    // burbuja actual antes de que el valor empiece a moverse.
+    requestAnimationFrame(() => {
+      Animated.timing(erisProgress, { toValue: 1, duration: 520, easing: EASE_OPEN, useNativeDriver: true })
+        .start(({ finished }) => { if (finished) setMorphing(false); });
+    });
+  }, [erisProgress]);
+
+  // Tocar una notificación (o uno de sus botones) lleva a donde corresponde. Antes solo abría la app.
+  const handleNotificationOpen = useCallback((o: NotificationOpen | null) => {
+    if (!o || o.kind === 'approval') return; // la tarjeta de aprobación aparece sola al abrir la app
+    // "Pedir ayuda a Eris" (glucosa) y "Pedir ideas" (colación, proteína): manda la pregunta ya escrita
+    if ((o.action === 'ayuda' || o.action === 'ideas') && o.message) { openEris(o.message); return; }
+    // Revisión I2 (2026-11-04): «Ver mi día», «Ver» (suplemento) y «Elegir hora» llevan a su lugar, aunque haya otra
+    // cosa abierta encima (el chat, Forge, Finanzas, Inventario, Sueño)
+    const cerrarCapas = () => {
+      if (erisOpenRef.current) {
+        Keyboard.dismiss();
+        setErisOpen(false);
+        setMorphing(true);
+        Animated.timing(erisProgress, { toValue: 0, duration: 380, easing: EASE_CLOSE, useNativeDriver: true }).start(({ finished }) => { if (finished) setMorphing(false); });
+      }
+      setTojiPhase((p) => (p === 'hidden' ? p : 'exiting'));
+      setWalletPhase((p) => (p === 'hidden' ? p : 'exiting'));
+      setInvPhase((p) => (p === 'hidden' ? p : 'exiting'));
+      setSleepOpen(false);
+    };
+    const ir = (ruta: string) => { try { if (navRef.isReady()) navRef.navigate(ruta); } catch {} };
+    const inicio = enterprise && axsMode ? 'Panel' : axsMode ? 'SYS' : 'Dashboard';
+    const nutricion = enterprise && axsMode ? null : axsMode ? 'NUT' : enabledModules.includes('nutri') ? 'Nutri' : null;
+    if (o.action === 'sup_abrir' || (o.kind === 'supplement' && !o.action.startsWith('sup_'))) {
+      cerrarCapas();
+      ir(nutricion ?? inicio);
+      if (nutricion) pedirDestino('suplementos');
+      return;
+    }
+    if (o.action === 'intent_hora') {
+      // La tarjeta «¿Entrenas hoy?» abre directo en la hora; está en Forge → Hoy (y en Inicio)
+      cerrarCapas();
+      setTojiMounted(true);
+      setTojiPhase((p) => (p === 'hidden' || p === 'exiting' ? 'entering' : p));
+      pedirDestino('entreno_hora');
+      return;
+    }
+    // Botones (o el toque) de los avisos del día: llevan al módulo que corresponde
+    const button = o.action === 'forge' || o.action === 'finanzas' || o.action === 'anotar' || o.action === 'anotar_gasto';
+    const target = button ? (o.action === 'forge' ? 'forge' : o.action === 'finanzas' ? 'finanzas' : 'eris') : o.action === 'plan_ver' ? 'home' : (o.tap ?? 'eris');
+    if (target === 'forge') { setTojiMounted(true); setTojiPhase((p) => (p === 'hidden' ? 'entering' : p)); return; }
+    if (target === 'finanzas') { setWalletMounted(true); setWalletPhase((p) => (p === 'hidden' ? 'entering' : p)); return; }
+    if (target === 'home') { cerrarCapas(); ir(inicio); return; } // el resumen de la mañana, el plan del día, lo de la semana
+    if (target === 'sleep') { setSleepOpen(true); return; }
+    openEris();
+  }, [openEris, erisProgress, axsMode, enterprise, enabledModules]);
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(NOTIFICATION_OPEN_EVENT, handleNotificationOpen);
+    // Cualquier pantalla puede abrir el chat con una pregunta lista ("Díselo a Eris" en el buscador de Nutrición)
+    const ask = DeviceEventEmitter.addListener(ERIS_ASK_EVENT, (msg: string) => { if (typeof msg === 'string' && msg.trim()) openEris(msg); });
+    return () => { sub.remove(); ask.remove(); };
+  }, [handleNotificationOpen, openEris]);
+  // La app estaba cerrada y se abrió desde una notificación: se atiende cuando ya hay sesión y terminó el portal
+  useEffect(() => {
+    if (!authed || !introFired.current || introPhase !== 'hidden') return; // espera a que el portal de inicio termine
+    handleNotificationOpen(erisNotifications.takeLaunchAction());
+  }, [authed, introPhase, handleNotificationOpen]);
+
+  // El servidor necesita saber si estás en Modo AXS Executive: fuera de él, Eris no usa las herramientas de AXS
+  useEffect(() => {
+    wsManager.setAxsMode(axsMode);
+    PersonaStore.set(axsMode ? 'hestia' : 'eris');
+    AppModeStore.set(axsMode && enterprise ? 'empresa' : axsMode ? 'hestia' : 'eris');
+  }, [axsMode, enterprise]);
+
+  // Eris · Hestia · Empresa desde el Dashboard (ModeSwitch). Hestia y Empresa solo para administradores.
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(APP_MODE_EVENT, async (m: AppMode) => {
+      if (m !== 'eris' && !isAdminRole(wsManager.getLastConnectedPayload()?.role)) return;
+      const axs = m !== 'eris';
+      const ent = m === 'empresa';
+      setAxsMode(axs);
+      setEnterprise(ent);
+      setErisOpen(false); // el chat abierto era de la otra asistente
+      try {
+        const pid = (await AuthStorage.getCredentials())?.profileId;
+        if (pid) {
+          await AsyncStorage.setItem(`eris_axs_mode_${pid}`, JSON.stringify(axs));
+          await AsyncStorage.setItem(`eris_enterprise_mode_${pid}`, String(ent));
+        }
+      } catch {}
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Burbuja de Eris sobre otras apps (modules/eris-bubble): fuera de la app la dibuja Android donde estaba la burbuja
+  // de acá; tocarla vuelve a la app y abre el chat.
+  const erisOpenRef = useRef(false);
+  useEffect(() => { erisOpenRef.current = erisOpen; }, [erisOpen]);
+  // Los servicios de fondo y el servidor saben qué módulos están encendidos (revisión A2); en Modo AXS se ven todos
+  useEffect(() => { modulosOn.set(axsMode ? null : enabledModules); DeviceEventEmitter.emit('ERIS_PLAN_REFRESH'); }, [enabledModules, axsMode]);
+  useEffect(() => {
+    if (!ErisBubble.available) return;
+    // Modo burbuja: con la app en pantalla el servicio queda listo (escondido); al minimizar, salir o cambiar de app,
+    // Eris pasa a burbuja y el proceso sigue vivo (sin el servicio, Android congela la app a los segundos y Eris deja
+    // de escuchar). Se relanza en cada regreso porque la ✕ de la burbuja la cierra solo "por ahora".
+    const ensureService = () => { if (authed && ErisBubble.isActive()) ErisBubble.enable(); };
+    ensureService();
+    ErisBubble.setAppForeground(AppState.currentState === 'active');
+    const openIfTapped = () => {
+      if (authed && ErisBubble.consumePendingOpen() && !erisOpenRef.current) setTimeout(() => openEris(), 250);
+    };
+    openIfTapped();
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') {
+        ErisBubble.setAppForeground(true);
+        ErisBubble.setState('idle'); // ya estás acá: la respuesta pendiente se ve en el chat
+        ensureService();
+        openIfTapped();
+      } else if (st === 'background') ErisBubble.setAppForeground(false, getErisBubbleCenter());
+    });
+    return () => sub.remove();
+  }, [authed, openEris]);
 
   const closeEris = useCallback(() => {
+    Keyboard.dismiss();
     setErisOpen(false);
-    Animated.timing(erisSlide, { toValue: SCREEN_H, duration: 270, useNativeDriver: true }).start();
-  }, [erisSlide]);
+    setMorphing(true);
+    Animated.timing(erisProgress, { toValue: 0, duration: 380, easing: EASE_CLOSE, useNativeDriver: true })
+      .start(({ finished }) => { if (finished) setMorphing(false); });
+  }, [erisProgress]);
+
+  // Botón "atrás" de Android cierra el chat en vez de sacarte de la app. Se
+  // registra al abrir (no al montar) para quedar por delante del handler de
+  // Finanzas, que si no se comería el gesto y cerraría la billetera debajo.
+  useEffect(() => {
+    if (!erisOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { closeEris(); return true; });
+    return () => sub.remove();
+  }, [erisOpen, closeEris]);
+
+  // Montar el chat en un momento ocioso tras entrar, no recién al primer toque:
+  // montar la pantalla entera a la vez que corre la animación la hacía tartamudear.
+  useEffect(() => {
+    if (!authed) return;
+    const t = setTimeout(() => {
+      InteractionManager.runAfterInteractions(() => setErisEverOpened(true));
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [authed]);
+
+  const morph = useMemo(() => {
+    const ax = morphAnchor.x, ay = morphAnchor.y;
+    // Radio justo para cubrir la esquina más lejana desde la burbuja.
+    const r = Math.ceil(Math.hypot(Math.max(ax, SCREEN_W - ax), Math.max(ay, SCREEN_H - ay))) + 24;
+    const clamp = 'clamp' as const;
+    const p = erisProgress;
+    return {
+      circleFrame: { left: ax - r, top: ay - r, width: r * 2, height: r * 2, borderRadius: r },
+      circleScale: p.interpolate({ inputRange: [0, 0.78], outputRange: [BUBBLE_SIZE / (r * 2), 1], extrapolate: clamp }),
+      circleOpacity: p.interpolate({ inputRange: [0, 0.02], outputRange: [0, 1], extrapolate: clamp }),
+      edgeOpacity: p.interpolate({ inputRange: [0, 0.08, 0.7], outputRange: [0, 0.9, 0], extrapolate: clamp }),
+      backdropOpacity: p.interpolate({ inputRange: [0, 0.5], outputRange: [0, 1], extrapolate: clamp }),
+      // El chat entra cuando el círculo ya cubrió ~3/4 de la pantalla (y al
+      // cerrar se va primero), para no tapar el revelado.
+      contentOpacity: p.interpolate({ inputRange: [0.6, 0.95], outputRange: [0, 1], extrapolate: clamp }),
+      contentTransform: [
+        { translateX: p.interpolate({ inputRange: [0.6, 1], outputRange: [(ax - SCREEN_W / 2) * 0.08, 0], extrapolate: clamp }) },
+        { translateY: p.interpolate({ inputRange: [0.6, 1], outputRange: [(ay - SCREEN_H / 2) * 0.08, 0], extrapolate: clamp }) },
+        { scale: p.interpolate({ inputRange: [0.6, 1], outputRange: [0.95, 1], extrapolate: clamp }) },
+      ],
+    };
+  }, [morphAnchor, erisProgress]);
 
   const navigateToChat = (msg?: string) => openEris(msg);
 
+  // Se llama tras loguear comida/agua en NutritionScreen — salta la caché de 5 min
+  // de MetricsService para que el bloque de macros/hidratación en Métricas se
+  // actualice de inmediato en vez de esperar al TTL o a un foreground.
+  const refreshSnapshot = useCallback(async () => {
+    const snap = await nutritionBackend.merge(await metricsService.getSnapshot(true));
+    setSnapshot(snap);
+    sendHealthSnapshot(snap);
+  }, []);
+
+  // Mientras se lee la sesión guardada (unos milisegundos): el mismo fondo de la pantalla de carga nativa y del
+  // portal de inicio, para que el paso de uno a otro sea continuo (antes aparecía un ⚡ con "ERIS" en medio).
   if (checking) {
     return (
-      <View style={[s.splash, s.splashCenter]}>
+      <View style={s.splash}>
         <StatusBar barStyle="light-content" backgroundColor={T.bg} />
-        <Text style={s.splashIcon}>⚡</Text>
-        <Text style={s.splashLabel}>ERIS</Text>
       </View>
     );
   }
@@ -349,30 +819,39 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      {/* Tarjeta "Eris pide permiso": vive fuera de las pantallas para verse siempre */}
+      <ApprovalHost />
+      {/* Finanzas invisible: aplica lo que Eris anota por chat cuando Finanzas no está abierta */}
+      <FinanceHeadlessHost />
       <TabLayout
         onLogout={handleLogout}
         onSwitchAccount={handleSwitchAccount}
         onNavigateToChat={navigateToChat}
         snapshot={snapshot}
+        onNutritionLogged={refreshSnapshot}
         axsMode={axsMode}
+        enterprise={axsMode && enterprise}
         enabledModules={enabledModules}
         onTojiPress={() => {
-          if (tojiPhase === 'hidden') setTojiPhase('entering');
+          if (tojiPhase === 'hidden') { setTojiMounted(true); setTojiPhase('entering'); }
         }}
         onWalletPress={() => {
-          if (walletPhase === 'hidden') setWalletPhase('entering');
+          if (walletPhase === 'hidden') { setWalletMounted(true); setWalletPhase('entering'); }
         }}
-        erisOpen={erisOpen}
-        tojiOpen={tojiPhase !== 'hidden'}
-        walletOpen={walletPhase !== 'hidden'}
-        onOpenEris={openEris}
+        onInventoryPress={() => {
+          if (invPhase === 'hidden') { setInvMounted(true); setInvPhase('entering'); }
+        }}
+        onTabChange={setActiveTab}
       />
+
+      {/* Bienvenida (1 minuto, la primera vez): qué quieres mejorar, a qué hora te levantas, reloj y cómo se usa */}
+      {welcome && introPhase === 'hidden' && <WelcomeFlow initialModules={enabledModules} onDone={finishWelcome} />}
 
       {/* Portal de inicio — se dispara una vez al autenticar, presenta AXS/ERIS */}
       {introPhase !== 'hidden' && (
         <PortalOverlay
           phase={introPhase}
-          label="ERIS"
+          label={persona.name.toUpperCase()}
           presentOnly
           onEnterComplete={() => setIntroPhase('exiting')}
           onExitComplete={() => setIntroPhase('hidden')}
@@ -381,127 +860,149 @@ export default function App() {
         </PortalOverlay>
       )}
 
-      {/* Toji: monta el WebView solo mientras el portal está activo */}
-      {tojiPhase !== 'hidden' && (
+      {/* Forge: tras la primera apertura (o la precarga) queda montado y oculto; el portal espera a que esté listo */}
+      {tojiMounted && (
         <PortalOverlay
           phase={tojiPhase}
+          label="FORGE"
+          theme="forge"
+          ready={tojiReady}
+          tint="forge"
           onEnterComplete={() => setTojiPhase('open')}
-          onExitComplete={() => {
-            setTojiPhase('hidden');
-            const action = tojiExitAction.current;
-            const msg = pendingTojiMsg.current;
-            tojiExitAction.current = 'exit';
-            pendingTojiMsg.current = null;
-            if (action === 'chat' && msg) openEris(msg);
-            else if (action === 'eris') {
-              // Snap ChatScreen a posición y disparar portal Eris intro encima
-              erisSlide.setValue(0);
-              setErisEverOpened(true);
-              setErisOpen(true);
-              setErisIntroPhase('entering');
-            }
-          }}
+          onExitComplete={() => setTojiPhase('hidden')}
         >
-          <TojiScreen
+          <ForgeScreen
             snapshot={snapshot}
-            onNavigateToChat={(msg) => {
-              tojiExitAction.current = 'chat';
-              pendingTojiMsg.current = msg;
-              setTojiPhase('exiting');
-            }}
-            onExit={() => {
-              tojiExitAction.current = 'exit';
-              setTojiPhase('exiting');
-            }}
-            onGoToEris={() => {
-              tojiExitAction.current = 'eris';
-              setTojiPhase('exiting');
-            }}
+            active={tojiPhase !== 'hidden'}
+            onReadyChange={setTojiReady}
+            onExit={() => setTojiPhase('exiting')}
           />
         </PortalOverlay>
       )}
 
-      {/* Hunter Wallet: monta WebView solo mientras el portal está activo */}
-      {walletPhase !== 'hidden' && (
+      {/* Finanzas: igual que Forge */}
+      {walletMounted && (
         <PortalOverlay
           phase={walletPhase}
           label="FINANZAS"
+          theme="finanzas"
+          ready={walletReady}
+          tint="finanzas"
           onEnterComplete={() => setWalletPhase('open')}
-          onExitComplete={() => {
-            setWalletPhase('hidden');
-            const msg = walletPendingMsg.current;
-            walletPendingMsg.current = undefined;
-            if (msg !== undefined) msg ? openEris(msg) : openEris();
-          }}
+          onExitComplete={() => setWalletPhase('hidden')}
         >
-          <HunterWalletScreen
+          <FinanceScreen
+            active={walletPhase !== 'hidden'}
+            onReadyChange={setWalletReady}
             onExit={() => setWalletPhase('exiting')}
-            onGoToEris={() => {
-              walletPendingMsg.current = '';
-              setWalletPhase('exiting');
-            }}
           />
         </PortalOverlay>
       )}
 
-      {/* ⚡ Eris siempre montado tras primera apertura — sesión y estado nunca se resetean */}
-      {erisEverOpened && (
-        <Animated.View
-          style={[StyleSheet.absoluteFill, { transform: [{ translateY: erisSlide }] }]}
-          pointerEvents={erisOpen ? 'box-none' : 'none'}
-        >
-          <ChatScreen
-            onLogout={handleLogout}
-            onClose={closeEris}
-            pendingMessage={erisInitMsg}
-          />
-        </Animated.View>
-      )}
-
-      {/* Portal Toji→Eris — encima del ChatScreen para taparlo mientras la transición juega */}
-      {erisIntroPhase !== 'hidden' && (
+      {/* Inventario: igual que Finanzas */}
+      {invMounted && (
         <PortalOverlay
-          phase={erisIntroPhase}
-          label="ERIS"
-          presentOnly
-          onEnterComplete={() => setErisIntroPhase('exiting')}
-          onExitComplete={() => setErisIntroPhase('hidden')}
+          phase={invPhase}
+          label="INVENTARIO"
+          theme="inventario"
+          ready={invReady}
+          tint="nutricion"
+          onEnterComplete={() => setInvPhase('open')}
+          onExitComplete={() => setInvPhase('hidden')}
         >
-          <View />
+          <InventoryScreen
+            active={invPhase !== 'hidden'}
+            onReadyChange={setInvReady}
+            onExit={() => setInvPhase('exiting')}
+          />
         </PortalOverlay>
       )}
+
+      {/* Sueño 2.0 · S4: un aviso de sueño («último café», «a acostarse») abre la pantalla de Sueño */}
+      <SleepScreen visible={sleepOpen} onClose={() => setSleepOpen(false)} />
+
+      {/* ⚡ Eris siempre montado — sesión y estado nunca se resetean. Al abrir,
+          un círculo nace desde la burbuja y cubre la pantalla; el chat aparece
+          encima. Al cerrar, todo se recoge de vuelta hacia la burbuja. */}
+      {erisEverOpened && (
+        <View style={StyleSheet.absoluteFill} pointerEvents={erisOpen ? 'box-none' : 'none'}>
+          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, s.morphBackdrop, { opacity: morph.backdropOpacity }]} />
+          <Animated.View
+            pointerEvents="none"
+            style={[s.morphCircle, morph.circleFrame, { opacity: morph.circleOpacity, transform: [{ scale: morph.circleScale }] }]}
+          />
+          <Animated.View
+            pointerEvents="none"
+            style={[s.morphEdge, morph.circleFrame, { borderColor: persona.accent, opacity: morph.edgeOpacity, transform: [{ scale: morph.circleScale }] }]}
+          />
+          <Animated.View
+            style={[StyleSheet.absoluteFill, { opacity: morph.contentOpacity, transform: morph.contentTransform }]}
+            renderToHardwareTextureAndroid={morphing}
+            shouldRasterizeIOS={morphing}
+          >
+            <ChatScreen
+              onLogout={handleLogout}
+              onClose={closeEris}
+              pendingMessage={erisInitMsg}
+              axsMode={axsMode}
+            />
+          </Animated.View>
+        </View>
+      )}
+
+      {/* ⚡ Burbuja flotante global de Eris — arrastrable, se pega al borde más
+          cercano y recuerda su posición. Se esconde mientras juega una
+          transición de portal (no debe flotar sobre el logo AXS) y se funde en
+          el chat al abrirlo. */}
+      <ErisFAB
+        onOpen={() => openEris(undefined)}
+        interactive={!erisOpen}
+        hidden={
+          introPhase !== 'hidden' ||
+          tojiPhase === 'entering' || tojiPhase === 'exiting' ||
+          walletPhase === 'entering' || walletPhase === 'exiting' ||
+          invPhase === 'entering' || invPhase === 'exiting'
+        }
+        morphProgress={erisProgress}
+        // La nube del ícono toma el color del módulo en pantalla (el núcleo menta es siempre Eris)
+        tint={walletPhase !== 'hidden' ? 'finanzas' : tojiPhase !== 'hidden' ? 'forge' : invPhase !== 'hidden' ? 'nutricion' : tintForTab(activeTab)}
+      />
     </SafeAreaProvider>
   );
 }
 
 // TabLayout separado para que useSafeAreaInsets esté siempre dentro de SafeAreaProvider
 function TabLayout({
-  onLogout, onSwitchAccount, onNavigateToChat, snapshot, axsMode, enabledModules,
-  onTojiPress, onWalletPress, erisOpen, tojiOpen, walletOpen, onOpenEris
+  onLogout, onSwitchAccount, onNavigateToChat, snapshot, onNutritionLogged, axsMode, enterprise, enabledModules,
+  onTojiPress, onWalletPress, onInventoryPress, onTabChange,
 }: {
   onLogout: () => void;
   onSwitchAccount: () => void;
   onNavigateToChat: (msg?: string) => void;
   snapshot: any;
+  onNutritionLogged: () => void;
   axsMode: boolean;
+  /** Modo Empresa: menú de trabajo de AXS (Panel, Proyectos, Pendientes, Sistema) */
+  enterprise: boolean;
   enabledModules: string[];
   onTojiPress: () => void;
   onWalletPress: () => void;
-  erisOpen: boolean;
-  tojiOpen: boolean;
-  walletOpen: boolean;
-  onOpenEris: (msg?: string) => void;
+  onInventoryPress: () => void;
+  /** Pestaña en pantalla (nombre de la ruta): define el color del ícono de Eris */
+  onTabChange?: (route?: string) => void;
 }) {
-  const has = (id: string) => enabledModules.includes(id);
+  // Glucosa en revisión: sin visto bueno del administrador no aparece, aunque el perfil la tuviera activada
+  const glucoseOn = useFeature('glucose');
+  const has = (id: string) => enabledModules.includes(id) && (id !== 'glucosa' || glucoseOn);
   const insets = useSafeAreaInsets();
   const TAB_BAR_HEIGHT = 56 + insets.bottom;
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={T.bg} />
-      <NavigationContainer>
+      <NavigationContainer ref={navRef} onStateChange={(st) => onTabChange?.(st?.routes?.[st.index ?? 0]?.name)}>
         <Tab.Navigator
-          key={[...enabledModules].sort().join('_')}
+          key={[...enabledModules].sort().join('_') + (enterprise ? '#empresa' : axsMode ? '#hestia' : '#eris')}
           screenOptions={({ route }) => ({
             headerShown: false,
             tabBarStyle: [
@@ -515,8 +1016,10 @@ function TabLayout({
             tabBarInactiveTintColor: T.textMuted,
             tabBarLabelStyle: s.tabLabel,
             tabBarItemStyle: s.tabItem,
-            tabBarBackground: () => <View style={s.tabBarBg} />,
-            tabBarLabel: route.name,
+            // La barra se registra para el recorrido guiado (que ilumina cada pestaña)
+            tabBarBackground: () => <View style={s.tabBarBg} ref={tourRef('tabbar')} collapsable={false} />,
+            // Nombres simples a la vista (las rutas siguen igual: la navegación y los íconos las usan)
+            tabBarLabel: TAB_LABELS[route.name] ?? route.name,
             tabBarIcon: ({ focused }) => (
               <View style={[tabS.iconWrap, focused && tabS.iconActive]}>
                 <SvgTabIcon name={route.name} focused={focused} />
@@ -524,9 +1027,28 @@ function TabLayout({
             ),
           })}
         >
-          {axsMode ? (
+          {enterprise ? (
             <>
-              {/* AXS EXECUTIVE TABS */}
+              {/* MODO EMPRESA: el trabajo de AXS. Forge y Finanzas siguen a un toque desde el Panel; Hestia, en la burbuja */}
+              <Tab.Screen name="Panel">
+                {() => <EnterprisePanel onNavigateToChat={onNavigateToChat} onTojiPress={onTojiPress} onWalletPress={onWalletPress} />}
+              </Tab.Screen>
+              <Tab.Screen name="Proyectos">
+                {() => <EnterpriseProjects onNavigateToChat={onNavigateToChat} />}
+              </Tab.Screen>
+              <Tab.Screen name="Pendientes">
+                {() => <EnterprisePending onNavigateToChat={onNavigateToChat} />}
+              </Tab.Screen>
+              <Tab.Screen name="Sistema">
+                {() => <EnterpriseSystem />}
+              </Tab.Screen>
+              <Tab.Screen name="ID">
+                {() => <ProfileScreen onLogout={onLogout} onSwitchAccount={onSwitchAccount} />}
+              </Tab.Screen>
+            </>
+          ) : axsMode ? (
+            <>
+              {/* AXS EXECUTIVE TABS (Hestia): las mismas vistas y permisos que Eris */}
               <Tab.Screen name="SYS">
                 {() => <HomeScreen onNavigateToChat={onNavigateToChat} />}
               </Tab.Screen>
@@ -539,11 +1061,19 @@ function TabLayout({
               >
                 {() => <View style={{ flex: 1, backgroundColor: T.bg }} />}
               </Tab.Screen>
-              <Tab.Screen name="SEC" component={GlucoTrackScreen} />
-              <Tab.Screen name="NUT" component={NutritionScreen} />
+              {glucoseOn && <Tab.Screen name="SEC" component={GlucoTrackScreen} />}
+              <Tab.Screen name="NUT">
+                {() => <NutritionScreen onDataLogged={onNutritionLogged} />}
+              </Tab.Screen>
               <Tab.Screen
                 name="FIN"
                 listeners={{ tabPress: (e) => { e.preventDefault(); onWalletPress(); } }}
+              >
+                {() => <View style={{ flex: 1, backgroundColor: T.bg }} />}
+              </Tab.Screen>
+              <Tab.Screen
+                name="INV"
+                listeners={{ tabPress: (e) => { e.preventDefault(); onInventoryPress(); } }}
               >
                 {() => <View style={{ flex: 1, backgroundColor: T.bg }} />}
               </Tab.Screen>
@@ -554,7 +1084,7 @@ function TabLayout({
           ) : (
             <>
               {/* PUBLIC TABS — filtrados por módulos activos del perfil */}
-              <Tab.Screen name="Pulso">
+              <Tab.Screen name="Dashboard">
                 {() => <HomeScreen onNavigateToChat={onNavigateToChat} />}
               </Tab.Screen>
               <Tab.Screen name="Métricas">
@@ -572,12 +1102,22 @@ function TabLayout({
                 <Tab.Screen name="Glucosa" component={GlucoTrackScreen} />
               )}
               {has('nutri') && (
-                <Tab.Screen name="Nutri" component={NutritionScreen} />
+                <Tab.Screen name="Nutri">
+                  {() => <NutritionScreen onDataLogged={onNutritionLogged} />}
+                </Tab.Screen>
               )}
               {has('finanzas') && (
                 <Tab.Screen
                   name="Finanzas"
                   listeners={{ tabPress: (e) => { e.preventDefault(); onWalletPress(); } }}
+                >
+                  {() => <View style={{ flex: 1, backgroundColor: T.bg }} />}
+                </Tab.Screen>
+              )}
+              {has('inventario') && (
+                <Tab.Screen
+                  name="Inventario"
+                  listeners={{ tabPress: (e) => { e.preventDefault(); onInventoryPress(); } }}
                 >
                   {() => <View style={{ flex: 1, backgroundColor: T.bg }} />}
                 </Tab.Screen>
@@ -589,14 +1129,6 @@ function TabLayout({
           )}
         </Tab.Navigator>
       </NavigationContainer>
-
-      {/* ⚡ Burbuja flotante de Eris — oculta cuando Toji, Wallet o Eris están abiertos */}
-      {!erisOpen && !tojiOpen && !walletOpen && (
-        <ErisFAB
-          onOpen={() => onOpenEris(undefined)}
-          bottomOffset={TAB_BAR_HEIGHT + 14}
-        />
-      )}
     </View>
   );
 }
@@ -624,6 +1156,13 @@ const s = StyleSheet.create({
   },
   tabLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   tabItem: { gap: 4 },
+
+  morphBackdrop: { backgroundColor: 'rgba(2,2,5,0.62)' },
+  // Mismo color que el fondo del chat: cuando el círculo termina de crecer, el
+  // chat aparece encima sin ningún corte de color.
+  morphCircle: { position: 'absolute', backgroundColor: T.bg },
+  // Borde cian que viaja con el frente del círculo y se apaga antes de llegar a las esquinas.
+  morphEdge: { position: 'absolute', borderWidth: 2.5, borderColor: T.accent },
 });
 
 // Cache invalidate 2

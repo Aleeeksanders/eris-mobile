@@ -1,4 +1,13 @@
 import { NetworkConfig } from "../config/env";
+import { AuthStorage } from "./AuthStorage";
+
+// Capacidades que este cliente anuncia al servidor al autenticarse. 'approvals' = sabe mostrar la tarjeta Aprobar/Rechazar;
+// sin ella el servidor NO ejecuta acciones sensibles (comandos, archivos…) para esta conexión.
+// 'finance_ops' = sabe aplicar en Finanzas lo que Eris anota por chat (FinanceBridge + FinanceHeadlessHost).
+// 'inventory_ops' = sabe aplicar en el Inventario lo que Eris anota por chat (inventoryStore, 2026-10-22).
+const CLIENT_CAPS = ['approvals', 'finance_ops', 'inventory_ops', 'supplement_ops'];
+// Tope para abrir una conexión antes de probar la otra ruta (Tailscale ↔ WiFi de la casa)
+const CONNECT_TIMEOUT_MS = 5000;
 
 type MessageHandler = (data: any) => void;
 type ConnectionStatusHandler = (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void;
@@ -25,18 +34,26 @@ class WebSocketManager {
   private lastConnectedPayload: any = null;
   
   private credentials = { profileId: 'default', pin: '' };
-  private _tojiPanelActive = false;
-
-  setTojiPanelActive(val: boolean) { this._tojiPanelActive = val; }
-  isTojiPanelActive() { return this._tojiPanelActive; }
-
+  // Cómo se autentica esta conexión: token de sesión (reconexiones) o ID token de Google (primer ingreso)
+  private auth: {
+    session?: string;
+    google?: { idToken: string; link?: { profileId: string; pin: string }; forceNew?: boolean };
+  } = {};
   public getLastConnectedPayload() {
     return this.lastConnectedPayload;
   }
 
-  public setCredentials(profileId: string, pin: string) {
+  /** Solo para armar la URL (el servidor decide el perfil real a partir de tu cuenta de Google). */
+  public setCredentials(profileId: string, _pin = '') {
     this.credentials.profileId = profileId;
-    this.credentials.pin = pin;
+  }
+
+  public setAuth(a: { session?: string; google?: { idToken: string; link?: { profileId: string; pin: string }; forceNew?: boolean } }) {
+    this.auth = a;
+  }
+
+  public getSessionToken(): string | undefined {
+    return this.auth.session;
   }
 
   public connect(sessionId?: string) {
@@ -92,7 +109,20 @@ class WebSocketManager {
       this.state.ws = new WebSocket(url);
       const currentWs = this.state.ws;
 
+      // Sin tope, un intento a una ruta inalcanzable (Tailscale apagado en el teléfono) quedaba colgado hasta que Android
+      // se rendía — 20 s o más — antes de probar el WiFi de la casa: la app parecía "no responder". Si no abre en
+      // CONNECT_TIMEOUT_MS, se prueba de inmediato la otra ruta.
+      const connectTimer = setTimeout(() => {
+        if (this.state.ws !== currentWs || this.state.status !== 'connecting') return;
+        currentWs.onopen = currentWs.onclose = currentWs.onerror = currentWs.onmessage = null;
+        try { currentWs.close(); } catch {}
+        this.state.ws = null;
+        this.updateStatus('disconnected');
+        if (this.autoReconnect) this.handleFallbackAndReconnect(300);
+      }, CONNECT_TIMEOUT_MS);
+
       currentWs.onopen = () => {
+        clearTimeout(connectTimer);
         if (this.state.ws !== currentWs) return;
         console.log('[WS] Conectado exitosamente');
         this.updateStatus('connected');
@@ -106,8 +136,25 @@ class WebSocketManager {
 
           // Interceptar petición de autenticación
           if (data.type === 'auth_required') {
-            this.state.ws?.send(JSON.stringify({ type: 'auth', pin: this.credentials.pin }));
+            if (this.auth.google) {
+              this.state.ws?.send(JSON.stringify({ type: 'auth_google', ...this.auth.google, caps: CLIENT_CAPS }));
+            } else if (this.auth.session) {
+              this.state.ws?.send(JSON.stringify({ type: 'auth_session', token: this.auth.session, caps: CLIENT_CAPS }));
+            } else {
+              // Sin sesión ni Google: hay que iniciar sesión (la UI muestra el botón de Google)
+              this.messageHandlers.forEach(handler => handler({ type: 'auth_error', code: 'login_required', message: 'Inicia sesión con Google.' }));
+            }
             return; // No propagar este mensaje a la UI
+          }
+
+          // El servidor emite el token de sesión al iniciar con Google: se guarda y las reconexiones lo usan
+          if (data.type === 'connected' && data.sessionToken && data.profileId) {
+            this.auth = { session: data.sessionToken };
+            this.credentials.profileId = data.profileId;
+            AuthStorage.saveSession(data.profileId, data.sessionToken).catch(() => {});
+          }
+          if (data.type === 'auth_error' && (data.code === 'session_expired' || data.code === 'invalid_token')) {
+            this.auth = {};
           }
 
           // Si el server nos da un ID de sesión, lo guardamos para reconexiones
@@ -117,7 +164,12 @@ class WebSocketManager {
               this.lastConnectedPayload = data;
             }
           }
-          this.messageHandlers.forEach(handler => handler(data));
+          // Cada pantalla por separado: antes, si una fallaba al procesar un mensaje, las siguientes no lo recibían.
+          this.messageHandlers.forEach(handler => {
+            try { handler(data); } catch (e) { console.error('[WS] Error en un receptor de mensajes', e); }
+          });
+          // Recién conectado: el servidor tiene que saber si hablas con Eris o con Hestia (lista de chats de cada una)
+          if (data.type === 'connected') this.sendPersona();
         } catch (e) {
           console.error('[WS] Error parseando mensaje', e);
         }
@@ -129,6 +181,7 @@ class WebSocketManager {
       };
 
       currentWs.onclose = () => {
+        clearTimeout(connectTimer);
         if (this.state.ws !== currentWs) return;
         console.log('[WS] Desconectado');
         this.state.ws = null;
@@ -145,19 +198,33 @@ class WebSocketManager {
     }
   }
 
-  private handleFallbackAndReconnect() {
+  private handleFallbackAndReconnect(delayMs = 3000) {
     // Si fallamos, invertimos la ruta. Si tratamos LAN y falló, testear CLOUD.
     this.state.isLocal = !this.state.isLocal;
-    console.log(`[WS] Fallback de red activo. Intentando por ruta ${this.state.isLocal ? 'Local' : 'Cloud'} en 3s...`);
-    
+    console.log(`[WS] Fallback de red activo. Intentando por ruta ${this.state.isLocal ? 'Local' : 'Cloud'} en ${delayMs} ms...`);
+
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
       this.attemptConnection();
-    }, 3000);
+    }, delayMs);
+  }
+
+  // Modo AXS Executive (Perfil). Viaja con cada mensaje al chat: fuera de ese modo el servidor no le da a Eris las
+  // herramientas de AXS (bóveda, briefing, reportes).
+  private axsMode = false;
+  public setAxsMode(on: boolean) {
+    const changed = on !== this.axsMode;
+    this.axsMode = on;
+    // Eris y Hestia tienen cada una su lista de chats: el servidor cambia de lista (y de chat abierto) al enterarse
+    if (changed) this.sendPersona();
+  }
+  private sendPersona() {
+    if (this.state.ws && this.state.status === 'connected') this.state.ws.send(JSON.stringify({ type: 'set_persona', axs: this.axsMode }));
   }
 
   public sendMessage(data: any) {
     if (this.state.ws && this.state.status === 'connected') {
+      if (data && (data.type === 'message' || data.type === 'voice_message')) data = { ...data, axs: this.axsMode };
       this.state.ws.send(JSON.stringify(data));
     } else {
       console.warn('[WS] Intento de enviar mensaje sin conexión activa');

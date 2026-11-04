@@ -7,11 +7,13 @@ import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, Modal, StyleSheet, TextInput, TouchableOpacity,
   FlatList, ActivityIndicator, KeyboardAvoidingView, Platform,
-  ScrollView, Alert,
+  ScrollView,
 } from 'react-native';
 import { T, R, S } from '../../config/design';
 import type { MobileGlucoService, FoodSearchResult, FoodDetail, MealLogEntry } from '../../services/GlucoService';
 import BarcodeScanner from './BarcodeScanner';
+import AddProductModal from '../AddProductModal';
+import { foodSearchService, type FoodItem } from '../../services/FoodSearchService';
 
 interface MealItem {
   food: FoodDetail;
@@ -30,10 +32,10 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
   const [results, setResults] = useState<FoodSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [mealItems, setMealItems] = useState<MealItem[]>([]);
-  const [step, setStep] = useState<'search' | 'review'>('search');
   const [saving, setSaving] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
+  const [addProduct, setAddProduct] = useState<{ code: string; name?: string; brand?: string } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSearch = useCallback((text: string) => {
@@ -68,13 +70,31 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
       if (food) {
         setMealItems(prev => [...prev, { food, portionMultiplier: 1 }]);
       } else {
-        setBarcodeError(`Producto no encontrado (${code}). Prueba buscarlo por nombre.`);
+        // Misma cascada que Nutrición (caché, base chilena de Eris, OFF con variantes del código); si nadie la tiene, etiqueta
+        const hit = await foodSearchService.lookupBarcode(code);
+        if (hit.food) addFoodItem(hit.food);
+        else setAddProduct({ code: hit.code, name: hit.nameOnly?.name, brand: hit.nameOnly?.brand });
       }
     } catch {
       setBarcodeError('Error al consultar el producto. Verifica la conexión con Eris.');
     } finally {
       setSearching(false);
     }
+  };
+
+  /** FoodItem (por 100 g) → FoodDetail de GlucoTrack, con su porción (o 100 g si el envase no la trae). */
+  const addFoodItem = (f: FoodItem) => {
+    const g = f.servings[0]?.grams ?? f.servingSize ?? 100;
+    const k = g / 100;
+    const detail: FoodDetail = {
+      id: f.id, name: f.name, brandName: f.brand, type: f.brand ? 'Brand' : 'Generic',
+      defaultServing: {
+        id: `${f.id}_${g}`, description: f.servings[0]?.description ?? `${g} g`,
+        calories: Math.round(f.calories * k), carbs: Math.round(f.carbs * k * 10) / 10, fiber: Math.round(f.fiber * k * 10) / 10,
+        protein: Math.round(f.protein * k * 10) / 10, fat: Math.round(f.fat * k * 10) / 10, sugar: Math.round(f.sugar * k * 10) / 10,
+      },
+    };
+    setMealItems(prev => [...prev, { food: detail, portionMultiplier: 1 }]);
   };
 
   const handleChangePortion = (idx: number, delta: number) => {
@@ -92,7 +112,7 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
   // Cálculo de estimación (GL simplificado)
   const estimation = React.useMemo(() => {
     if (mealItems.length === 0) return null;
-    let totalCal = 0, totalCarbs = 0, totalFiber = 0, totalProt = 0, totalFat = 0;
+    let totalCal = 0, totalCarbs = 0, totalFiber = 0, totalProt = 0, totalFat = 0, totalSugar = 0;
     for (const { food, portionMultiplier } of mealItems) {
       const s = food.defaultServing;
       totalCal  += s.calories * portionMultiplier;
@@ -100,13 +120,14 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
       totalFiber += s.fiber * portionMultiplier;
       totalProt  += s.protein * portionMultiplier;
       totalFat   += s.fat * portionMultiplier;
+      totalSugar += (s.sugar ?? 0) * portionMultiplier;
     }
     const netCarbs = Math.max(0, totalCarbs - totalFiber);
     const gi = 60; // GI genérico — en v2 se hace lookup por nombre
     const gl = parseFloat(((gi * netCarbs) / 100).toFixed(1));
     const adjGL = parseFloat((gl * Math.max(0.5, 1 - totalProt * 0.005) * Math.max(0.6, 1 - totalFat * 0.003)).toFixed(1));
     const risk: MealLogEntry['riskLevel'] = adjGL <= 10 ? 'low' : adjGL <= 19 ? 'medium' : adjGL <= 30 ? 'high' : 'very_high';
-    return { totalCal: Math.round(totalCal), totalCarbs: Math.round(totalCarbs), totalFiber: Math.round(totalFiber), totalProt: Math.round(totalProt), totalFat: Math.round(totalFat), gl: adjGL, risk };
+    return { totalCal: Math.round(totalCal), totalCarbs: Math.round(totalCarbs), totalFiber: Math.round(totalFiber), totalProt: Math.round(totalProt), totalFat: Math.round(totalFat), totalSugar: Math.round(totalSugar), gl: adjGL, risk };
   }, [mealItems]);
 
   const handleSave = async () => {
@@ -124,6 +145,7 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
         carbs: Math.round(food.defaultServing.carbs * portionMultiplier),
         protein: Math.round(food.defaultServing.protein * portionMultiplier),
         fat: Math.round(food.defaultServing.fat * portionMultiplier),
+        sugar: Math.round((food.defaultServing.sugar ?? 0) * portionMultiplier),
       })),
       totalCalories: estimation.totalCal,
       estimatedGL: estimation.gl,
@@ -132,11 +154,11 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
     setSaving(false);
     onSave(entry);
     // reset
-    setQuery(''); setResults([]); setMealItems([]); setStep('search');
+    setQuery(''); setResults([]); setMealItems([]);
   };
 
   const handleClose = () => {
-    setQuery(''); setResults([]); setMealItems([]); setStep('search');
+    setQuery(''); setResults([]); setMealItems([]);
     setBarcodeError(null); setShowScanner(false);
     onClose();
   };
@@ -214,7 +236,7 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
                 <View style={{ flex: 1 }}>
                   <Text style={s.mealName}>{food.name}</Text>
                   <Text style={s.mealMacros}>
-                    {Math.round(s2.calories * portionMultiplier)} kcal · C {Math.round(s2.carbs * portionMultiplier)}g · P {Math.round(s2.protein * portionMultiplier)}g · G {Math.round(s2.fat * portionMultiplier)}g
+                    {Math.round(s2.calories * portionMultiplier)} kcal · C {Math.round(s2.carbs * portionMultiplier)}g · P {Math.round(s2.protein * portionMultiplier)}g · G {Math.round(s2.fat * portionMultiplier)}g{s2.sugar != null ? ` · Az ${Math.round(s2.sugar * portionMultiplier)}g` : ''}
                   </Text>
                 </View>
                 <View style={s.portionCtrl}>
@@ -247,7 +269,7 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
                 </View>
               </View>
               <Text style={s.estimMacros}>
-                {estimation.totalCal} kcal · Carbs {estimation.totalCarbs}g · Fibra {estimation.totalFiber}g · Prot {estimation.totalProt}g · Grasa {estimation.totalFat}g
+                {estimation.totalCal} kcal · Carbs {estimation.totalCarbs}g · Fibra {estimation.totalFiber}g · Prot {estimation.totalProt}g · Grasa {estimation.totalFat}g · Azúcar {estimation.totalSugar}g
               </Text>
             </View>
           )}
@@ -275,6 +297,15 @@ export default function FoodSearchModal({ visible, service, onClose, onSave }: P
         visible={showScanner}
         onClose={() => setShowScanner(false)}
         onBarcode={handleBarcode}
+      />
+
+      <AddProductModal
+        visible={!!addProduct}
+        code={addProduct?.code ?? ''}
+        suggestedName={addProduct?.name}
+        suggestedBrand={addProduct?.brand}
+        onClose={() => { setAddProduct(null); setBarcodeError('Puedes buscarlo por nombre o volver a escanearlo y cargar la etiqueta.'); }}
+        onSaved={(food) => { setAddProduct(null); addFoodItem(food); }}
       />
     </Modal>
   );

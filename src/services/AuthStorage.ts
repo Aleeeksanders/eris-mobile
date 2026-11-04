@@ -1,34 +1,38 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// ─── Sesión ─────────────────────────────────────────────────────────────────
+// El acceso es SOLO con Google. El teléfono guarda un token de sesión al azar (lo emite el servidor tras verificar tu
+// cuenta de Google); nunca una clave de cifrado ni un PIN. Cerrar sesión lo invalida también en el servidor.
 const PROFILE_KEY = 'eris_profile_id';
-const PIN_KEY = 'eris_pin';
+const SESSION_KEY = 'eris_session_token';
 const DISPLAY_NAME_KEY = 'eris_display_name';
 
+// Restos del acceso anterior (ID + PIN). Ya no se usan para entrar: solo sirven UNA vez para vincular el perfil que
+// ya tenías con tu cuenta de Google, y después se borran.
+const LEGACY_PIN_KEY = 'eris_pin';
+const LEGACY_PIN_PREFIX = 'eris_pin_';
+
 export const AuthStorage = {
-  async saveCredentials(profileId: string, pin: string) {
+  async saveSession(profileId: string, token: string) {
     await AsyncStorage.multiSet([
       [PROFILE_KEY, profileId],
-      [PIN_KEY, pin],
-      [`eris_pin_${profileId}`, pin], // Siempre sincronizado para Google re-login
+      [SESSION_KEY, token],
     ]);
   },
 
+  async getSession(): Promise<{ profileId: string; token: string } | null> {
+    const [profileId, token] = await Promise.all([AsyncStorage.getItem(PROFILE_KEY), AsyncStorage.getItem(SESSION_KEY)]);
+    return profileId && token ? { profileId, token } : null;
+  },
+
+  /** Compatibilidad con pantallas que solo necesitan saber QUÉ perfil está activo (ya no hay PIN). */
   async getCredentials(): Promise<{ profileId: string; pin: string } | null> {
     const profileId = await AsyncStorage.getItem(PROFILE_KEY);
-    const pin = await AsyncStorage.getItem(PIN_KEY);
-    if (!profileId) return null;
-    return { profileId, pin: pin || '' };
+    return profileId ? { profileId, pin: '' } : null;
   },
 
   async clearCredentials() {
-    // Solo borra la sesión activa. eris_pin_${profileId} se conserva para
-    // que Google Sign-In pueda recuperar las credenciales en un re-login
-    // sin generar un PIN nuevo que el servidor rechazaría.
-    await AsyncStorage.multiRemove([PROFILE_KEY, PIN_KEY, DISPLAY_NAME_KEY]);
-  },
-
-  async setPin(pin: string) {
-    await AsyncStorage.setItem(PIN_KEY, pin);
+    await AsyncStorage.multiRemove([PROFILE_KEY, SESSION_KEY, DISPLAY_NAME_KEY]);
   },
 
   async getDisplayName(): Promise<string | null> {
@@ -39,43 +43,24 @@ export const AuthStorage = {
     await AsyncStorage.setItem(DISPLAY_NAME_KEY, name);
   },
 
+  // ─── Migración desde el acceso anterior ───────────────────────────────────
   /**
-   * Inicializa credenciales de forma autónoma.
-   * Si se pasa un `forProfileId` (Google Sign-In), usa ese ID.
-   * Si no, intenta recuperar credenciales guardadas.
-   * Si no hay nada guardado, retorna null (sin defaults peligrosos).
+   * Perfiles que este teléfono conocía con su PIN. `emailAlias` (la parte del correo antes de la @) va primero, porque el
+   * acceso con Google anterior usaba ese alias como ID de perfil.
    */
-  async initializeIfNeeded(forProfileId?: string): Promise<{ profileId: string; pin: string; isNew: boolean } | null> {
-    // Si viene un profileId de Google, buscamos credenciales guardadas para ÉSE perfil
-    if (forProfileId) {
-      const stored = await AsyncStorage.getItem(`eris_pin_${forProfileId}`);
-      if (stored) {
-        await this.saveCredentials(forProfileId, stored);
-        return { profileId: forProfileId, pin: stored, isNew: false };
-      }
-      // Primera vez con ese perfil de Google — generar PIN seguro
-      const genPin = () => {
-        if (typeof crypto !== 'undefined' && (crypto as any).getRandomValues) {
-          const bytes = new Uint8Array(4);
-          (crypto as any).getRandomValues(bytes);
-          return Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-        }
-        return Math.random().toString(36).slice(2, 6).toUpperCase() +
-               Math.random().toString(36).slice(2, 6).toUpperCase();
-      };
-      const pin = genPin();
-      await AsyncStorage.setItem(`eris_pin_${forProfileId}`, pin);
-      await this.saveCredentials(forProfileId, pin);
-      return { profileId: forProfileId, pin, isNew: true };
-    }
+  async getLegacyCandidates(emailAlias: string): Promise<Array<{ profileId: string; pin: string }>> {
+    const out: Array<{ profileId: string; pin: string }> = [];
+    const push = (profileId: string | null, pin: string | null) => {
+      if (profileId && pin && !out.some((c) => c.profileId === profileId)) out.push({ profileId, pin });
+    };
+    const alias = emailAlias.toLowerCase().replace(/[^a-z0-9._-]/g, '');
+    push(alias, await AsyncStorage.getItem(`${LEGACY_PIN_PREFIX}${alias}`));
+    push(await AsyncStorage.getItem(PROFILE_KEY), await AsyncStorage.getItem(LEGACY_PIN_KEY));
+    return out;
+  },
 
-    // Flujo estándar: recuperar credenciales guardadas
-    const existing = await this.getCredentials();
-    if (existing && existing.profileId) {
-      return { ...existing, isNew: false };
-    }
-
-    // Sin credenciales guardadas — retornar null para mostrar formulario
-    return null;
+  async clearLegacy() {
+    const keys = await AsyncStorage.getAllKeys();
+    await AsyncStorage.multiRemove(keys.filter((k) => k === LEGACY_PIN_KEY || k.startsWith(LEGACY_PIN_PREFIX)));
   },
 };

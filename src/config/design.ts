@@ -3,7 +3,7 @@
 
 export const T = {
   // Fondos
-  bg: '#08080a',
+  bg: '#07060b',
   bgCard: '#0e0e12',
   bgInput: '#12121a',
   bgElevated: '#141418',
