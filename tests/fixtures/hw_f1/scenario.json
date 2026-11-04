@@ -1,0 +1,115 @@
+{
+ "seed": {
+  "hw_setup_done": "true",
+  "hw_ledger_v": "3",
+  "hw_sm": "510000",
+  "hw_last_cuenta": "101",
+  "hw_chat_log": "[]",
+  "hw2_cuentas": "[{\"id\": \"cash\", \"nombre\": \"Efectivo\", \"banco\": \"\", \"tipo\": \"efectivo\", \"saldoInicial\": 20000}, {\"id\": 101, \"nombre\": \"BCI Cuenta corriente\", \"banco\": \"BCI\", \"tipo\": \"debito\", \"saldoInicial\": 450000}, {\"id\": 102, \"nombre\": \"CMR Falabella\", \"banco\": \"Banco Falabella\", \"tipo\": \"credito\", \"cupo\": 800000, \"saldoInicial\": 700000}, {\"id\": 103, \"nombre\": \"Tenpo\", \"banco\": \"Tenpo\", \"tipo\": \"debito\", \"saldoInicial\": 30000}, {\"id\": 104, \"nombre\": \"Ahorro\", \"banco\": \"\", \"tipo\": \"ahorro\", \"saldoInicial\": 100000}]",
+  "hw2_prog": "[{\"id\": 201, \"tipo\": \"ingreso\", \"desc\": \"Sueldo\", \"monto\": 900000, \"dia\": 30, \"cuenta\": 101, \"fuente\": \"sueldo\", \"parte\": \"saldo\"}, {\"id\": 202, \"tipo\": \"ingreso\", \"desc\": \"Anticipo\", \"monto\": 300000, \"dia\": 15, \"cuenta\": 101, \"fuente\": \"sueldo\", \"parte\": \"anticipo\"}, {\"id\": 203, \"tipo\": \"gasto\", \"desc\": \"Arriendo\", \"monto\": 350000, \"dia\": 5, \"cuenta\": 101, \"cat\": \"vivienda\"}, {\"id\": 204, \"tipo\": \"gasto\", \"desc\": \"Spotify\", \"monto\": 5990, \"dia\": 1, \"cuenta\": 102, \"cat\": \"entretenimiento\"}]",
+  "hw2_sueldo": "[{\"id\": 301, \"monto\": 1200000, \"fecha\": \"2026-01-01\", \"desc\": \"Sueldo\"}]",
+  "hw2_rec_applied": "[\"203:2026-09\"]",
+  "hw2_tx": "[{\"id\": 401, \"tipo\": \"gasto\", \"fecha\": \"2026-08-10\", \"monto\": 360000, \"desde\": 102, \"cat\": \"otros\", \"desc\": \"Notebook\", \"cuotas\": 6}, {\"id\": 402, \"tipo\": \"gasto\", \"fecha\": \"2026-10-02\", \"monto\": 15000, \"desde\": 101, \"cat\": \"alimentacion\", \"desc\": \"Super\"}, {\"id\": 403, \"tipo\": \"prestamo\", \"fecha\": \"2026-10-03\", \"monto\": 20000, \"desde\": 101, \"desc\": \"Juan — almuerzo\", \"devolucion\": \"2026-10-28\"}, {\"id\": 404, \"tipo\": \"ingreso\", \"fuente\": \"extra\", \"fecha\": \"2026-10-04\", \"monto\": 50000, \"hacia\": 103, \"desc\": \"Freelance\"}, {\"id\": 405, \"tipo\": \"gasto\", \"fecha\": \"2026-09-20\", \"monto\": 80000, \"desde\": 102, \"cat\": \"salud\", \"desc\": \"Dentista\"}]",
+  "hw_presup": "{\"alimentacion\": 200000, \"transporte\": 60000}",
+  "hw_metas": "[{\"id\": 501, \"desc\": \"Viaje\", \"target\": 1000000}]"
+ },
+ "ops": [
+  {
+   "action": "gasto",
+   "monto": 4990,
+   "descripcion": "almuerzo",
+   "categoria": "alimentacion"
+  },
+  {
+   "action": "gasto",
+   "monto": 12000,
+   "descripcion": "bencina",
+   "categoria": "transporte",
+   "cuenta": "tenpo"
+  },
+  {
+   "action": "gasto",
+   "monto": 180000,
+   "descripcion": "celular",
+   "categoria": "otros",
+   "cuenta": "cmr",
+   "cuotas": 6
+  },
+  {
+   "action": "gasto",
+   "monto": 999999,
+   "descripcion": "tele",
+   "categoria": "otros",
+   "cuenta": "tenpo"
+  },
+  {
+   "action": "gasto",
+   "monto": 5000,
+   "descripcion": "algo",
+   "categoria": "otros",
+   "cuenta": "banco"
+  },
+  {
+   "action": "prestamo",
+   "monto": 10000,
+   "persona": "Pedro",
+   "cuenta": "bci",
+   "devolucion": "2026-10-28"
+  },
+  {
+   "action": "cobro",
+   "persona": "juan",
+   "monto": 5000
+  },
+  {
+   "action": "abono",
+   "descripcion": "me llegó el sueldo",
+   "fuente": "sueldo"
+  },
+  {
+   "action": "abono",
+   "monto": 25000,
+   "descripcion": "devolución compra",
+   "cuenta": "tenpo"
+  },
+  {
+   "action": "giro",
+   "monto": 20000,
+   "cuenta": "bci"
+  },
+  {
+   "action": "pago_tarjeta",
+   "monto": 50000,
+   "cuenta": "bci"
+  },
+  {
+   "action": "transferencia",
+   "monto": 10000,
+   "cuenta": "bci",
+   "hacia": "tenpo"
+  },
+  {
+   "action": "ahorro",
+   "monto": 30000,
+   "cuenta": "bci"
+  },
+  {
+   "action": "deshacer",
+   "objeto": "gasto"
+  },
+  {
+   "action": "deshacer",
+   "objeto": "gasto",
+   "descripcion": "bencina"
+  },
+  {
+   "action": "resumen"
+  },
+  {
+   "action": "abono",
+   "descripcion": "me llegó la quincena",
+   "fuente": "sueldo"
+  }
+ ],
+ "hoy": "2026-10-16"
+}

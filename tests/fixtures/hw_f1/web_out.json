@@ -1,0 +1,344 @@
+{
+ "results": [
+  {
+   "ok": true,
+   "data": {
+    "desc": "almuerzo",
+    "monto": 4990,
+    "cat": "alimentacion",
+    "catLabel": "Provisiones",
+    "catIcon": "⚔️",
+    "fecha": "2026-10-16",
+    "cuenta": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 410010
+    },
+    "asumida": true,
+    "mesCat": {
+     "gastado": 19990,
+     "presup": 200000
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "desc": "bencina",
+    "monto": 12000,
+    "cat": "transporte",
+    "catLabel": "Desplazamiento",
+    "catIcon": "🐉",
+    "fecha": "2026-10-16",
+    "cuenta": {
+     "nombre": "Tenpo",
+     "tipo": "debito",
+     "saldo": 68000
+    },
+    "asumida": false,
+    "mesCat": {
+     "gastado": 12000,
+     "presup": 60000
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "desc": "celular",
+    "monto": 180000,
+    "cat": "otros",
+    "catLabel": "Misceláneos",
+    "catIcon": "🎒",
+    "fecha": "2026-10-16",
+    "cuenta": {
+     "nombre": "CMR Falabella",
+     "tipo": "credito",
+     "saldo": 80000,
+     "cupo": 800000
+    },
+    "asumida": false,
+    "cuotas": 6,
+    "valorCuota": 30000,
+    "primeraCuota": "noviembre",
+    "mesCat": {
+     "gastado": 60000,
+     "presup": 0
+    }
+   }
+  },
+  {
+   "ok": false,
+   "code": "sin_fondos",
+   "msg": "Saldo insuficiente en Tenpo (tiene $68.000)",
+   "opciones": [],
+   "data": {
+    "campo": "cuenta"
+   }
+  },
+  {
+   "ok": false,
+   "code": "cuenta_ambigua",
+   "msg": "\"banco\" calza con 4 cuentas",
+   "opciones": [
+    "BCI Cuenta corriente",
+    "CMR Falabella",
+    "Tenpo",
+    "Ahorro"
+   ],
+   "data": {
+    "campo": "cuenta"
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "persona": "Pedro",
+    "monto": 10000,
+    "devolucion": "2026-10-28",
+    "cuenta": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 400010
+    },
+    "asumida": false
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "persona": "Juan",
+    "monto": 5000,
+    "parcial": true,
+    "restante": 15000,
+    "cuenta": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 405010
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 900000,
+    "desc": "Sueldo",
+    "fuente": "sueldo",
+    "fuenteLabel": "Sueldo",
+    "programado": {
+     "desc": "Sueldo",
+     "esperado": 900000
+    },
+    "hacia": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1305010
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 25000,
+    "desc": "devolución compra",
+    "fuente": null,
+    "fuenteLabel": null,
+    "programado": null,
+    "hacia": {
+     "nombre": "Tenpo",
+     "tipo": "debito",
+     "saldo": 93000
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 20000,
+    "desde": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1285010
+    },
+    "hacia": {
+     "nombre": "Efectivo",
+     "tipo": "efectivo",
+     "saldo": 40000
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 50000,
+    "desde": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1235010
+    },
+    "hacia": {
+     "nombre": "CMR Falabella",
+     "tipo": "credito",
+     "saldo": 130000,
+     "cupo": 800000
+    },
+    "deuda": 670000
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 10000,
+    "desde": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1225010
+    },
+    "hacia": {
+     "nombre": "Tenpo",
+     "tipo": "debito",
+     "saldo": 103000
+    },
+    "deuda": 0
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "desc": "Ahorro",
+    "monto": 30000,
+    "ahorroAcum": 130000,
+    "desde": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1195010
+    },
+    "tier": {
+     "id": "E",
+     "siguiente": "D",
+     "falta": 125000
+    }
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "tipo": "el gasto",
+    "desc": "celular",
+    "monto": 180000,
+    "cuenta": "CMR Falabella"
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "tipo": "el gasto",
+    "desc": "bencina",
+    "monto": 12000,
+    "cuenta": "Tenpo"
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "hayBoveda": true,
+    "efectivo": 40000,
+    "cuentas": [
+     {
+      "nombre": "BCI Cuenta corriente",
+      "tipo": "debito",
+      "saldo": 845010
+     },
+     {
+      "nombre": "CMR Falabella",
+      "tipo": "credito",
+      "saldo": 304010,
+      "cupo": 800000
+     },
+     {
+      "nombre": "Tenpo",
+      "tipo": "debito",
+      "saldo": 115000
+     },
+     {
+      "nombre": "Ahorro",
+      "tipo": "ahorro",
+      "saldo": 130000
+     }
+    ],
+    "liquidez": 1000010,
+    "deudaTC": 495990,
+    "mes": "Octubre",
+    "gastoMes": 435980,
+    "ingreso": 1250000,
+    "ingresoExtra": 50000,
+    "disponible": 814020,
+    "pendienteCobro": 25000,
+    "ahorroAcum": 130000,
+    "porConfirmar": [
+     {
+      "desc": "Anticipo",
+      "monto": 300000,
+      "fecha": "2026-10-15"
+     }
+    ],
+    "proximos": [],
+    "cuotasProxMes": 60000
+   }
+  },
+  {
+   "ok": true,
+   "data": {
+    "monto": 300000,
+    "desc": "Anticipo",
+    "fuente": "sueldo",
+    "fuenteLabel": "Sueldo",
+    "programado": {
+     "desc": "Anticipo",
+     "esperado": 300000
+    },
+    "hacia": {
+     "nombre": "BCI Cuenta corriente",
+     "tipo": "debito",
+     "saldo": 1145010
+    }
+   }
+  }
+ ],
+ "summary": {
+  "hunterRank": "E",
+  "disponible": 814020,
+  "ahorroAcum": 130000,
+  "savingsRate": 65,
+  "liquidez": 1300010,
+  "deudaTC": 495990,
+  "sueldo": 1200000,
+  "ingresoMes": 1250000,
+  "ingresoExtra": 50000,
+  "ingresoPasivo": 0,
+  "porConfirmar": 0,
+  "cuotasPorCobrar": 240000,
+  "ultimoMovimiento": "2026-10-16",
+  "proximos": [],
+  "pendientes": [],
+  "comida": {
+   "gastado": 19990,
+   "presup": 200000
+  }
+ },
+ "context": "\n\n## Finanzas del Usuario (Hunter Wallet):\n- Sueldo esperado: $1.200.000 líquido (2.4x SM) — este mes llegaron $1.200.000\n- Ingresos extra este mes: $50.000\n- Cuotas por cobrar en tarjetas: $240.000 (1 compra; el próximo mes $60.000)\n- Hunter Rank: E | Sueldo: R.D | Ahorro: R.E\n- Gastos octubre 2026: $435.980\n  · Vivienda: $350.000\n  · Otros: $60.000\n  · Alimentacion: $19.990 / $200.000 presup (10%)\n  · Entretenimiento: $5.990\n  · Transporte: $0 / $60.000 presup (0%)\n- Disponible: $814.020\n- Tasa ahorro: 65%\n- Ahorro acumulado: $130.000\n- Me deben (pendiente): $25.000\n  · Juan — almuerzo: $15.000, devuelve el 2026-10-28\n  · Pedro: $10.000, devuelve el 2026-10-28\n- Cuentas y efectivo (Bóveda):\n  · Efectivo: $40.000\n  · BCI Cuenta corriente (débito): $1.145.010\n  · CMR Falabella (tarjeta de crédito): cupo libre $304.010 de $800.000, deuda $495.990\n  · Tenpo (débito): $115.000\n  · Ahorro (cuenta de ahorro): $130.000\n- Plata a mano (efectivo + débito): $1.300.010\n- Deuda total en tarjetas de crédito: $495.990\n",
+ "dump": {
+  "hw_ledger_v": "3",
+  "hw_chat_log": "[{\"tipo\":\"gasto\",\"id\":1792152388660,\"at\":1792152388661},{\"tipo\":\"prestamo\",\"id\":1792152388663,\"at\":1792152388672},{\"tipo\":\"cobro\",\"id\":1792152388664,\"at\":1792152388673},{\"tipo\":\"mov\",\"id\":1792152388665,\"at\":1792152388673},{\"tipo\":\"mov\",\"id\":1792152388666,\"at\":1792152388674},{\"tipo\":\"mov\",\"id\":1792152388667,\"at\":1792152388674},{\"tipo\":\"mov\",\"id\":1792152388668,\"at\":1792152388674},{\"tipo\":\"mov\",\"id\":1792152388669,\"at\":1792152388675},{\"tipo\":\"ahorro\",\"id\":1792152388670,\"at\":1792152388675},{\"tipo\":\"mov\",\"id\":1792152388673,\"at\":1792152388676}]",
+  "hw_sm": "510000",
+  "hw_metas": "[{\"id\": 501, \"desc\": \"Viaje\", \"target\": 1000000}]",
+  "hw2_cuentas": "[{\"id\": \"cash\", \"nombre\": \"Efectivo\", \"banco\": \"\", \"tipo\": \"efectivo\", \"saldoInicial\": 20000}, {\"id\": 101, \"nombre\": \"BCI Cuenta corriente\", \"banco\": \"BCI\", \"tipo\": \"debito\", \"saldoInicial\": 450000}, {\"id\": 102, \"nombre\": \"CMR Falabella\", \"banco\": \"Banco Falabella\", \"tipo\": \"credito\", \"cupo\": 800000, \"saldoInicial\": 700000}, {\"id\": 103, \"nombre\": \"Tenpo\", \"banco\": \"Tenpo\", \"tipo\": \"debito\", \"saldoInicial\": 30000}, {\"id\": 104, \"nombre\": \"Ahorro\", \"banco\": \"\", \"tipo\": \"ahorro\", \"saldoInicial\": 100000}]",
+  "hw2_rec_applied": "[\"203:2026-09\",\"201:2026-10\",\"203:2026-10\",\"204:2026-10\",\"202:2026-10\"]",
+  "hw_setup_done": "true",
+  "hw2_prog": "[{\"id\": 201, \"tipo\": \"ingreso\", \"desc\": \"Sueldo\", \"monto\": 900000, \"dia\": 30, \"cuenta\": 101, \"fuente\": \"sueldo\", \"parte\": \"saldo\"}, {\"id\": 202, \"tipo\": \"ingreso\", \"desc\": \"Anticipo\", \"monto\": 300000, \"dia\": 15, \"cuenta\": 101, \"fuente\": \"sueldo\", \"parte\": \"anticipo\"}, {\"id\": 203, \"tipo\": \"gasto\", \"desc\": \"Arriendo\", \"monto\": 350000, \"dia\": 5, \"cuenta\": 101, \"cat\": \"vivienda\"}, {\"id\": 204, \"tipo\": \"gasto\", \"desc\": \"Spotify\", \"monto\": 5990, \"dia\": 1, \"cuenta\": 102, \"cat\": \"entretenimiento\"}]",
+  "hw2_sueldo": "[{\"id\": 301, \"monto\": 1200000, \"fecha\": \"2026-01-01\", \"desc\": \"Sueldo\"}]",
+  "hw2_tx": "[{\"id\":401,\"tipo\":\"gasto\",\"fecha\":\"2026-08-10\",\"monto\":360000,\"desde\":102,\"cat\":\"otros\",\"desc\":\"Notebook\",\"cuotas\":6},{\"id\":402,\"tipo\":\"gasto\",\"fecha\":\"2026-10-02\",\"monto\":15000,\"desde\":101,\"cat\":\"alimentacion\",\"desc\":\"Super\"},{\"id\":403,\"tipo\":\"prestamo\",\"fecha\":\"2026-10-03\",\"monto\":20000,\"desde\":101,\"desc\":\"Juan — almuerzo\",\"devolucion\":\"2026-10-28\"},{\"id\":404,\"tipo\":\"ingreso\",\"fuente\":\"extra\",\"fecha\":\"2026-10-04\",\"monto\":50000,\"hacia\":103,\"desc\":\"Freelance\"},{\"id\":405,\"tipo\":\"gasto\",\"fecha\":\"2026-09-20\",\"monto\":80000,\"desde\":102,\"cat\":\"salud\",\"desc\":\"Dentista\"},{\"id\":1792152388660,\"fecha\":\"2026-10-16\",\"tipo\":\"gasto\",\"monto\":4990,\"desde\":101,\"cat\":\"alimentacion\",\"desc\":\"almuerzo\",\"via\":\"eris\"},{\"id\":1792152388663,\"fecha\":\"2026-10-16\",\"tipo\":\"prestamo\",\"monto\":10000,\"desde\":101,\"desc\":\"Pedro\",\"devolucion\":\"2026-10-28\",\"via\":\"eris\"},{\"id\":1792152388664,\"fecha\":\"2026-10-16\",\"tipo\":\"cobro\",\"prestamoId\":403,\"monto\":5000,\"hacia\":101,\"desc\":\"Cobro\",\"via\":\"eris\"},{\"id\":1792152388665,\"fecha\":\"2026-10-16\",\"tipo\":\"ingreso\",\"fuente\":\"sueldo\",\"monto\":900000,\"hacia\":101,\"desc\":\"Sueldo\",\"progId\":201,\"progMes\":\"2026-10\",\"via\":\"eris\"},{\"id\":1792152388666,\"fecha\":\"2026-10-16\",\"tipo\":\"abono\",\"monto\":25000,\"hacia\":103,\"desc\":\"devolución compra\",\"via\":\"eris\"},{\"id\":1792152388667,\"fecha\":\"2026-10-16\",\"tipo\":\"giro\",\"monto\":20000,\"desde\":101,\"hacia\":\"cash\",\"desc\":\"Giro\",\"via\":\"eris\"},{\"id\":1792152388668,\"fecha\":\"2026-10-16\",\"tipo\":\"transfer\",\"monto\":50000,\"desde\":101,\"hacia\":102,\"desc\":\"Pago de tarjeta\",\"via\":\"eris\"},{\"id\":1792152388669,\"fecha\":\"2026-10-16\",\"tipo\":\"transfer\",\"monto\":10000,\"desde\":101,\"hacia\":103,\"desc\":\"Transferencia\",\"via\":\"eris\"},{\"id\":1792152388670,\"fecha\":\"2026-10-16\",\"tipo\":\"ahorro\",\"monto\":30000,\"desde\":101,\"hacia\":104,\"desc\":\"Ahorro\",\"via\":\"eris\"},{\"id\":1792152388671,\"tipo\":\"gasto\",\"fecha\":\"2026-10-05\",\"monto\":350000,\"desde\":101,\"cat\":\"vivienda\",\"desc\":\"Arriendo ↻\",\"progId\":203,\"progMes\":\"2026-10\"},{\"id\":1792152388672,\"tipo\":\"gasto\",\"fecha\":\"2026-10-01\",\"monto\":5990,\"desde\":102,\"cat\":\"entretenimiento\",\"desc\":\"Spotify ↻\",\"progId\":204,\"progMes\":\"2026-10\"},{\"id\":1792152388673,\"fecha\":\"2026-10-16\",\"tipo\":\"ingreso\",\"fuente\":\"sueldo\",\"monto\":300000,\"hacia\":101,\"desc\":\"Anticipo\",\"progId\":202,\"progMes\":\"2026-10\",\"via\":\"eris\"}]",
+  "hw_last_cuenta": "101",
+  "hw_presup": "{\"alimentacion\": 200000, \"transporte\": 60000}"
+ }
+}
