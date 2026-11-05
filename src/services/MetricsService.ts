@@ -4,6 +4,7 @@ import { PROFILE_CHANGED_EVENT } from './ScopedStorage';
 import { STORAGE_KEY_WATER, STORAGE_KEY_LOG } from './nutritionSync';
 import { daySchedule } from './daySchedule';
 import { nutritionDayOf, nutritionDayStart, nutritionDayKey, isoDayKey } from './mealSchedule';
+import { diaActivo } from './activityDay';
 import { trackGoal, type GoalTrack } from './nutritionQualityCore';
 import { detectActivity, mainOrigin, type ActivitySummary, type ActivityLabel, type ActivityType } from './activityDetect';
 import { autoLevel, WINDOW_DAYS, type AutoLevel, type DayActivity } from './activityLevel';
@@ -574,9 +575,7 @@ class MetricsService {
           if (day.dayWake) {
             snapshot.dayWakeTime = day.dayWake;
             daySchedule.setWakeAt(day.dayWake);
-            // Pasos y actividad cuentan desde que terminó la noche (si terminó hoy, antes de las 13)
-            const woke = new Date(day.dayWake);
-            if (woke >= todayStart && woke.getHours() < 13) dayBoundary = woke;
+            // Pasos y actividad: desde que terminó la noche, dentro del día de comida (diaActivo, más abajo)
           }
         }
       }
@@ -586,6 +585,11 @@ class MetricsService {
       // duermes, no a medianoche (services/mealSchedule.ts): a las 2 AM sin haber dormido sigue siendo el día de ayer.
       const dctx = daySchedule.ctx();
       const calendarDay = nutritionDayStart(nutritionDayOf(now, dctx), dctx);
+      // Pasos, distancia, calorías activas, ejercicio y la actividad del reloj: el MISMO día que la comida, hasta que te
+      // duermes (pedido del usuario, 2026-11-05). Antes se cortaban a medianoche: a la 1:30 sin dormir lo comido iba a ayer
+      // y lo gastado partía de cero (services/activityDay.ts).
+      const activo = diaActivo(now, dctx, snapshot.dayWakeTime ?? null);
+      dayBoundary = activo.desde;
 
       // Lo que sigue es independiente entre sí: se pide en paralelo. Antes eran 14 llamadas nativas una tras otra y el
       // resumen tardaba la suma de todas.
@@ -776,7 +780,7 @@ class MetricsService {
       ]);
 
       // Actividad sin «modo entrenamiento» (básquet, fútbol, una caminata larga…): pulso + pasos + calorías del reloj
-      try { snapshot.activity = await this.detectActivityToday(todayStart, now, snapshot); } catch { /* sin permisos o sin datos */ }
+      try { snapshot.activity = await this.detectActivityToday(dayBoundary, now, snapshot, activo.clave); } catch { /* sin permisos o sin datos */ }
       try { snapshot.activityLevel = await this.readAutoLevel(); } catch {}
 
     } catch (e) {
@@ -842,9 +846,8 @@ class MetricsService {
    * de básquet… uno no se pone en modo entrenamiento con el smartwatch». Deja guardado el día (ejercicio y pasos) para el nivel
    * de actividad automático y los avisos, y de a poco reconstruye las 4 semanas anteriores.
    */
-  private async detectActivityToday(from: Date, now: Date, snap: HealthSnapshot): Promise<ActivitySummary | null> {
+  private async detectActivityToday(from: Date, now: Date, snap: HealthSnapshot, day: string = isoDayKey(now)): Promise<ActivitySummary | null> {
     const [inp, { body, labels, forge }] = await Promise.all([this.readActivityInputs(from, now), this.bodyAndLabels()]);
-    const day = isoDayKey(now);
     if (!inp.hr.length && !inp.steps.length && !inp.kcal.length && !inp.sessions.length) return null;
     // Todas las partes del sueño (la noche, un segundo sueño, siestas): durmiendo no hay actividad
     const sleep = snap.sleep?.episodes?.length
