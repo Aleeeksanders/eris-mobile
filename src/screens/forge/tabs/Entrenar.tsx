@@ -60,6 +60,23 @@ export default function Entrenar() {
   // El día de la rutina de hoy (forgeRoutine): objetivo de cada ejercicio con la progresión
   const routineDay = !editingPast && S.planDay && S.planDay.day === tk ? S.planDay : null;
 
+  // «Repetir un día» (pedido del usuario, 2026-11-04): los ejercicios de ese día pasan al plan de hoy
+  const [repetir, setRepetir] = useState(false);
+  const [eligiendo, setEligiendo] = useState<string | null>(null);
+  const dias = useMemo(() => R.trainedDays(S, 14), [S.sessions, S.customExercises]);
+  const esteDia = editingPast ? R.diaEntrenado(S, day) ?? undefined : undefined;
+  const hayPlanHoy = Object.keys(plan).length > 0;
+  const aplicarRepetir = async (dia: string, modo: 'reemplazar' | 'sumar') => {
+    const d = dias.find((x) => x.day === dia) ?? (esteDia?.day === dia ? esteDia : undefined);
+    setRepetir(false);
+    setEligiendo(null);
+    await act((s) => R.repeatDay(s, dia, modo), 'repetir día');
+    if (editingPast) ui.setViewDay(null);
+    ui.toast(0, `PLAN LISTO ✓ · ${d?.exIds.length ?? ''} EJERCICIOS DEL ${(d?.label ?? '').toUpperCase()}`.replace('  ', ' '));
+  };
+  // Con un plan ya armado hoy, se pregunta si se reemplaza o se suma; si no, se carga directo
+  const elegirDia = (dia: string) => { if (hayPlanHoy) { setRepetir(false); setEligiendo(dia); } else void aplicarRepetir(dia, 'reemplazar'); };
+
   const repeatLast = async (exId: string) => {
     const last = C.lastSetOf(S, exId);
     if (!last) { setLogger({ exId, day }); return; }
@@ -148,6 +165,11 @@ export default function Entrenar() {
         </View>
         <Btn title="Mi gimnasio" kind="ghost" small icon="Settings" onPress={() => setGymOpen(true)} />
       </Row>
+      {editingPast ? (
+        esteDia ? <Btn title="Repetir este entreno hoy" kind="gold" small icon="RotateCcw" onPress={() => elegirDia(day)} style={{ alignSelf: 'flex-start', marginBottom: 10 }} /> : null
+      ) : dias.length > 0 ? (
+        <Btn title="Repetir un día" kind="ghost" small icon="RotateCcw" onPress={() => setRepetir(true)} style={{ alignSelf: 'flex-start', marginBottom: 10 }} />
+      ) : null}
 
       {!editingPast && ui.ready && ui.ready.level !== 'normal' && !(totalTarget && totalDone >= totalTarget) && (
         <View style={[st.hint, { borderColor: (ui.ready.level === 'liviano' ? FG.orange : FG.gold) + '55' }]}>
@@ -167,6 +189,7 @@ export default function Entrenar() {
       {planIds.length === 0 && extraIds.length === 0 ? (
         <Panel>
           <P>Tu plan está vacío. Abajo, en <Text style={{ color: FG.white }}>AGREGAR EJERCICIOS</Text>, toca <Text style={{ color: FG.gold }}>+ Plan</Text> en los que vas a hacer. Después anotas cada serie con su peso y qué tan cerca del fallo quedaste.</P>
+          {!editingPast && dias.length > 0 && <Btn title={`Repetir lo del ${dias[0].label}`} kind="gold" small icon="RotateCcw" onPress={() => elegirDia(dias[0].day)} style={{ alignSelf: 'flex-start', marginTop: 10 }} />}
         </Panel>
       ) : (
         <View style={{ gap: 10, marginBottom: 14 }}>
@@ -236,6 +259,29 @@ export default function Entrenar() {
       </Panel>
 
       <SetLogger target={logger} onClose={() => setLogger(null)} />
+      <Sheet visible={repetir || !!eligiendo} onClose={() => { setRepetir(false); setEligiendo(null); }} title={eligiendo ? '¿Y TU PLAN DE HOY?' : 'REPETIR UN DÍA'}>
+        {eligiendo ? (
+          <View style={{ gap: 10 }}>
+            <P>Hoy ya tienes {planIds.length} ejercicio{planIds.length === 1 ? '' : 's'} en el plan. ¿Qué hago con lo del {R.diaTexto(eligiendo)}?</P>
+            <Btn title="Reemplazar el plan de hoy" icon="RotateCcw" onPress={() => { void aplicarRepetir(eligiendo, 'reemplazar'); }} />
+            <Btn title="Sumarlo a lo que ya tengo" kind="ghost" icon="Plus" onPress={() => { void aplicarRepetir(eligiendo, 'sumar'); }} />
+          </View>
+        ) : (
+          <View style={{ gap: 8 }}>
+            <P size={12.5}>Elige un día y sus ejercicios pasan al plan de hoy, en el mismo orden, con las mismas series y los pesos que usaste. Nada se anota solo: lo vas marcando al hacerlo.</P>
+            {dias.map((d) => (
+              <TouchableOpacity key={d.day} onPress={() => elegirDia(d.day)} activeOpacity={0.8} style={st.diaRow} accessibilityRole="button" accessibilityLabel={`Repetir el entreno del ${d.label}`}>
+                <View style={{ flex: 1 }}>
+                  <P color={FG.white} bold>{d.label.charAt(0).toUpperCase() + d.label.slice(1)}</P>
+                  <P size={12}>{d.exIds.length} ejercicio{d.exIds.length === 1 ? '' : 's'} · {d.sets} series</P>
+                  <P size={12} color={FG.dim} numberOfLines={2}>{d.names.join(' · ')}</P>
+                </View>
+                <Icon name="ChevronRight" size={16} color={FG.dim} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </Sheet>
       <GymSheet visible={gymOpen} onClose={() => setGymOpen(false)} />
       <ExerciseCreator visible={creator} onClose={() => setCreator(false)} />
     </View>
@@ -302,6 +348,7 @@ function ExerciseCreator({ visible, onClose }: { visible: boolean; onClose: () =
 }
 
 const st = StyleSheet.create({
+  diaRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel },
   exCard: { borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel, borderRadius: 14, padding: 12 },
   iconBtn: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: FG.line2, alignItems: 'center', justifyContent: 'center' },
   sets: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },

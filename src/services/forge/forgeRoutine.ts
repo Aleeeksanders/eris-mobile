@@ -598,4 +598,85 @@ export function routineContext(s: ForgeState): { gym: ForgeState['gym']; e1rm: R
   return { gym: s.gym, e1rm, experience: experienceOf(s), routine: s.routinePlan ?? null, today };
 }
 
+// ─── Repetir un día (pedido del usuario, 2026-11-04) ─────────────────────────────────────────────────────────────────
+// «Un botón en Forge que me permita tomar los ejercicios del día y repetir esa rutina en el hoy: lo que hice el domingo,
+// importarlo al entrenamiento de hoy.» Nada se anota como hecho: pasa a ser el PLAN de hoy.
+
+const DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+/** «domingo 2 nov» */
+export function diaTexto(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return `${DIAS_SEMANA[new Date(y, m - 1, d).getDay()]} ${d} ${MESES_CORTOS[m - 1]}`;
+}
+
+export interface DiaEntrenado { day: string; label: string; exIds: string[]; names: string[]; sets: number }
+
+/** Las series de trabajo de cada ejercicio de ese día, en el orden en que se hicieron (sin calentamiento). */
+function ejerciciosDelDia(s: ForgeState, day: string): Array<{ exId: string; work: FSet[] }> {
+  const cat = catalog(s);
+  const sess = (s.sessions || {})[day] || {};
+  return Object.entries(sess)
+    .map(([exId, sets], k) => ({ exId, work: (sets || []).filter((x) => !x.warmup), first: Math.min(...(sets || []).map((x) => x.at ?? Infinity), Infinity), k }))
+    .filter((e) => e.work.length && cat[e.exId])
+    .sort((a, b) => (a.first === b.first ? a.k - b.k : a.first - b.first))
+    .map(({ exId, work }) => ({ exId, work }));
+}
+
+/** Los días entrenados antes de hoy, del más reciente al más antiguo: para elegir cuál repetir. */
+export function trainedDays(s: ForgeState, n = 14, before: string = L.todayKey()): DiaEntrenado[] {
+  const out: DiaEntrenado[] = [];
+  for (const day of Object.keys(s.sessions || {}).sort().reverse()) {
+    if (day >= before) continue;
+    const d = diaEntrenado(s, day);
+    if (d) out.push(d);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+/** Lo que se entrenó ese día (null si no hay series de trabajo) */
+export function diaEntrenado(s: ForgeState, day: string): DiaEntrenado | null {
+  const ej = ejerciciosDelDia(s, day);
+  if (!ej.length) return null;
+  const cat = catalog(s);
+  return { day, label: diaTexto(day), exIds: ej.map((e) => e.exId), names: ej.map((e) => cat[e.exId].name), sets: ej.reduce((a, e) => a + e.work.length, 0) };
+}
+
+/**
+ * Los ejercicios de ese día pasan al plan de hoy, en el mismo orden y con las mismas series de trabajo. El objetivo de cada
+ * uno es lo que hiciste ese día: la carga que más usaste (a igualdad, la más alta) y tu rango de repeticiones, así el registro
+ * de la serie arranca con eso. «sumar» los agrega al plan que ya tenías hoy (no quita nada).
+ */
+export function repeatDay(s: ForgeState, day: string, modo: 'reemplazar' | 'sumar' = 'reemplazar'): ForgeState {
+  const tk = L.todayKey();
+  if (!day || day >= tk) return s;
+  const ej = ejerciciosDelDia(s, day);
+  if (!ej.length) return s;
+  const cat = catalog(s);
+  const pd = s.planDay && s.planDay.day === tk && !s.planDay.rest ? s.planDay : null;
+  const plan: Record<string, number> = modo === 'sumar' ? { ...(s.plan || {}) } : {};
+  const targets: Record<string, Target> = modo === 'sumar' && pd ? { ...(pd.targets || {}) } : {};
+  const why = `como el ${diaTexto(day)}`;
+  for (const { exId, work } of ej) {
+    const ex = cat[exId];
+    const cargaDe = (x: FSet) => (ex.eq === 'asist' ? x.assist : x.kg);
+    // La carga que más se repitió ese día (series rectas: la de todas; en pirámide, la más alta de las más usadas)
+    const veces = new Map<number, number>();
+    for (const x of work) { const c = cargaDe(x); if (c != null) veces.set(c, (veces.get(c) ?? 0) + 1); }
+    const carga = [...veces.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0];
+    const conEsa = carga != null ? work.filter((x) => cargaDe(x) === carga) : work;
+    const reps = conEsa.map((x) => x.reps).filter((r) => r > 0);
+    const rir = conEsa.map((x) => x.rir).filter((r): r is number => typeof r === 'number');
+    plan[exId] = Math.max(1, Math.min(12, work.length));
+    targets[exId] = {
+      exId, sets: plan[exId], repMin: reps.length ? Math.min(...reps) : 8, repMax: reps.length ? Math.max(...reps) : 8,
+      rir: rir.length ? Math.round(rir.reduce((a, b) => a + b, 0) / rir.length) : 2,
+      ...(carga != null ? { kg: carga } : {}), ...(conEsa.some((x) => x.unit === 'lb') ? { unit: 'lb' as const } : {}), why,
+    };
+  }
+  const name = modo === 'sumar' && pd ? `${pd.name} + ${diaTexto(day)}` : `Repite el ${diaTexto(day)}`;
+  return { ...s, plan, planDay: { day: tk, id: '', name, targets, repetido: day } };
+}
+
 export { effKg, e1rmOf };
