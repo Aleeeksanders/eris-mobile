@@ -165,6 +165,14 @@ function toEpisode(e: Ep, kind: EpisodeKind): SleepEpisode {
 
 const kindOf = (e: Ep): EpisodeKind => (e.asleepMin >= SEGUNDO_MIN ? 'segundo' : 'siesta');
 
+const dayKey = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+/** La parte más larga de 3 h o más */
+const longest = (eps: Ep[]) => eps.filter((e) => e.asleepMin >= 180).reduce<Ep | null>((a, b) => (!a || b.asleepMin > a.asleepMin ? b : a), null);
+
+/** ¿Esta parte ya es de un día posterior a esa noche? Un sueño largo que termina otra fecha (como separa sleepByDay), o cualquier sueño tras 24 h despierto. */
+const laterDay = (e: Ep, night: Ep) => e.start >= night.end && dayKey(e.end) !== dayKey(night.end) && (e.asleepMin >= 180 || e.start - night.end >= 24 * H);
+
 /**
  * El sueño del día: la última noche y lo que vino después (siestas, un segundo sueño). `sessions` = las sesiones de Health
  * Connect de las últimas ~36 h. null si no hay sueño.
@@ -175,8 +183,11 @@ export function sleepDay(sessions: RawSession[], o: SleepOpts = {}): SleepDay | 
   const w = nightWindow(o);
   const cands = eps.filter((e) => nightCandidate(e, w));
   // La noche: la última que calza con su ventana; si ninguna calza (turnos), la más larga de 3 h o más
-  const night = cands.length ? cands.reduce((a, b) => (b.end > a.end ? b : a))
-    : eps.filter((e) => e.asleepMin >= 180).reduce<Ep | null>((a, b) => (!a || b.asleepMin > a.asleepMin ? b : a), null);
+  const pick = cands.length ? cands.reduce((a, b) => (b.end > a.end ? b : a)) : longest(eps);
+  // Lo que vino después ya es otro día: esa noche es de ayer y no se suma. La noche es lo más largo de ese día, aunque termine
+  // fuera de la ventana. El 1-11 (acostarse de madrugada y despertar pasadas las 14:00) sumó las 7 h 10 del 31-10 + 10 h 31: «17 h 41».
+  const later = pick ? eps.filter((e) => laterDay(e, pick)) : [];
+  const night = later.length ? longest(later) : pick;
   // Lo del día: la noche y lo que vino después; sin noche, lo de las últimas 24 h
   const lastEnd = eps[eps.length - 1].end;
   const day = night ? eps.filter((e) => e.start >= night.start) : eps.filter((e) => e.end > lastEnd - 24 * H);
@@ -196,8 +207,6 @@ export function sleepDay(sessions: RawSession[], o: SleepOpts = {}): SleepDay | 
     ...(nightEp ? { efficiency: Math.round((nightEp.asleepMin / Math.max(1, (nightEp.end - nightEp.start) / MIN)) * 100) } : {}),
   };
 }
-
-const dayKey = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 /**
  * El historial por día (el día en que terminó cada parte): lo dormido en total y en la noche, y la hora en que terminó la

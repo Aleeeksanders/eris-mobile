@@ -1,7 +1,7 @@
 // Sueño 2.0 · S0: el núcleo con el día real del usuario (24-10, Mi Fitness) y los casos del plan.
 import { test, expect } from "bun:test";
 process.env.TZ = "America/Santiago";
-import { sleepDay, sleepByDay, sleepSummaryText, sleepReading, fmtSleep, type RawSession } from "C:/Proyectos/eris-mobile/src/services/sleep/sleepCore.ts";
+import { sleepDay, sleepByDay, sleepInsights, sleepSummaryText, sleepReading, fmtSleep, type RawSession } from "C:/Proyectos/eris-mobile/src/services/sleep/sleepCore.ts";
 
 const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m).getTime();
 /** Etapas seguidas: [etapa, minutos]… desde `start` */
@@ -62,6 +62,62 @@ test("turno de noche: sin nada en la ventana, la noche es la parte más larga de
   // con su despertar habitual aprendido (16:00), su ventana calza sola
   const d2 = sleepDay([{ start: at(24, 9, 0), end: at(24, 16, 0) }], { usualWake: 16, usualSleepH: 7 })!;
   expect(new Date(d2.dayWake!).getHours()).toBe(16);
+});
+
+// 1-11 (registro real: 17,68 total, 7,17 noche): 7 h 10 del 31-10 + 10 h 31 acostándose de madrugada y despertando pasadas las
+// 14:00. Sin las sesiones de Health Connect a mano, las horas son representativas; las duraciones y el resultado, los reales.
+const nov = (d: number, h: number, m: number) => new Date(2026, 10, d, h, m).getTime();
+const trasnoche = { usualWake: 8, usualSleepH: 6.25 };
+const noche31 = { start: at(31, 6, 40), end: at(31, 13, 50) };
+const dormido1 = [{ start: nov(1, 4, 20), end: nov(1, 9, 50) }, { start: nov(1, 10, 10), end: nov(1, 15, 11) }];
+
+test("un sueño largo que termina otro día no se suma a la noche anterior: el 1-11 no son «17 h 41»", () => {
+  const d = sleepDay([noche31, ...dormido1], trasnoche)!;
+  expect(d.totalH).toBe(10.52);
+  expect(d.nightH).toBe(10.52);
+  expect(d.episodes.map((e) => e.kind)).toEqual(["noche"]);
+  expect(new Date(d.dayWake!).getDate()).toBe(1);                // el día empezó hoy a las 15:11, no ayer a las 13:50
+  expect(new Date(d.dayWake!).getHours()).toBe(15);
+  expect(d.split).toBe(false);
+  expect(sleepSummaryText(d)).toBe("Dormiste 10 h 31 (de 04:20 a 15:11, con 20 min despierto en medio).");
+  // Igual que el historial por día
+  const h = sleepByDay([noche31, ...dormido1], trasnoche).get("2026-11-01")!;
+  expect([h.totalH, h.nightH]).toEqual([d.totalH, d.nightH]);
+});
+
+test("ese día, en el resumen de 2 semanas: no se toma por siesta ni corre la hora de acostarse", () => {
+  const now = nov(1, 15, 39);
+  const ins = sleepInsights([noche31, ...dormido1], { ...trasnoche, now });
+  expect(ins.bedtime.napShiftMin).toBe(0);
+  expect(ins.avgTotalH).toBe(8.84);                              // (7,17 + 10,52) / 2: siempre fue por día
+  expect(ins.score!.word).not.toBe("Partida");
+});
+
+test("sin su despertar aprendido, dos sueños largos fuera de la ventana no se suman: cuenta el último", () => {
+  const d = sleepDay([{ start: at(24, 5, 0), end: at(24, 14, 0) }, { start: at(25, 5, 0), end: at(25, 14, 0) }], {})!;
+  expect(d.totalH).toBe(9);
+  expect(new Date(d.dayWake!).getDate()).toBe(25);
+});
+
+test("un segundo sueño largo que termina el mismo día sí se suma, aunque pasen más de 24 h desde que empezó la noche", () => {
+  const d = sleepDay([{ start: at(23, 23, 0), end: at(24, 7, 0) }, { start: at(24, 20, 0), end: at(24, 23, 30) }], { usualWake: 7, usualSleepH: 8 })!;
+  expect(d.episodes.map((e) => e.kind)).toEqual(["noche", "segundo"]);
+  expect(d.totalH).toBe(11.5);
+  expect(d.nightH).toBe(8);
+  expect(new Date(d.dayWake!).getHours()).toBe(7);
+});
+
+test("una siesta que cruza la medianoche sigue siendo del mismo día: no se pierde la noche", () => {
+  const d = sleepDay([{ start: at(24, 0, 0), end: at(24, 8, 0) }, { start: at(24, 23, 40), end: at(25, 0, 20) }], { usualWake: 8, usualSleepH: 8 })!;
+  expect(d.episodes.map((e) => e.kind)).toEqual(["noche", "siesta"]);
+  expect(d.nightH).toBe(8);
+});
+
+test("sin dormir la noche, las siestas de después (24 h o más despierto) no se suman a la noche de ayer", () => {
+  const d = sleepDay([{ start: at(24, 1, 0), end: at(24, 8, 0) }, { start: at(25, 14, 0), end: at(25, 16, 30) }], { usualWake: 8, usualSleepH: 7 })!;
+  expect(d.night).toBeNull();
+  expect(d.totalH).toBe(2.5);
+  expect(d.dayWake).toBeNull();
 });
 
 test("dos apps con el mismo sueño no lo cuentan doble", () => {
