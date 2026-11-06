@@ -16,11 +16,18 @@
 // FUERZA: 1RM estimado (Epley con las reps en reserva), solo con series de 10 reps o menos y RIR 3 o menos.
 // ============================================================
 
-import { L, catalog, effKg, lastSetOf, type ForgeState, type FSet } from './forgeCore';
+import { L, catalog, effKg, lastSetOf, linkChain, tailText, type ForgeState, type FSet } from './forgeCore';
 import type { ForgeExercise } from './forgeCatalog';
 
 const r0 = (n: number) => Math.round(n);
 const SET_SECONDS_PER_REP = 3;
+/** Una negativa dura más que una repetición normal (baja lenta, 3–5 s); el resto del remate, como una repetición */
+const NEG_SECONDS = 4;
+/** Una negativa gasta cerca de 4 veces menos energía que levantar lo mismo (Hody 2019; Krzysztofik 2019): sus segundos cuentan ¼ */
+const NEG_ENERGY = 0.25;
+/** Lo que se le suma al descanso de una serie con remate: cansa más (Ahtiainen 2003: −56 % vs −38 % de fuerza al terminar) */
+const TAIL_REST = 60;
+const tailSeconds = (set: FSet) => (set.tail ? set.tail.reps * (set.tail.kind === 'neg' ? NEG_SECONDS : SET_SECONDS_PER_REP) : 0);
 
 /** MET de máquinas de cardio a ritmo moderado (Compendio 2024). */
 const CARDIO_MET: Record<string, number> = { trotadora: 7.0, bici: 6.8, eliptica: 5.0, escaladora: 8.8, remo_ergo: 7.0, cardio_z2: 6.0 };
@@ -75,20 +82,221 @@ export function restOf(ex: ForgeExercise, set: FSet): number {
   if (ex.eq === 'cardio') return 0;
   if (set.warmup) return 45;
   if (ex.unit === 'seg') return 45;
-  return set.rir == null ? 90 : set.rir <= 0 ? 120 : set.rir >= 3 ? 60 : 90;
+  return (set.rir == null ? 90 : set.rir <= 0 ? 120 : set.rir >= 3 ? 60 : 90) + (set.tail ? TAIL_REST : 0);
 }
 
 /** Minutos de una serie (trabajo + descanso). */
 export function setMinutes(ex: ForgeExercise, set: FSet): number {
-  const work = ex.unit === 'min' ? set.reps * 60 : ex.unit === 'seg' ? set.reps : set.reps * SET_SECONDS_PER_REP;
-  return (work + restOf(ex, set)) / 60;
+  return (setWorkSeconds(ex, set) + restOf(ex, set)) / 60;
+}
+
+/** Lo que dura la serie misma, sin el descanso: por tiempo, lo anotado; con repeticiones, ~3 s por cada una. */
+export function setWorkSeconds(ex: ForgeExercise, set: FSet): number {
+  return ex.unit === 'min' ? set.reps * 60 : ex.unit === 'seg' ? set.reps : set.reps * SET_SECONDS_PER_REP + tailSeconds(set);
+}
+
+// ─── La barra de descanso (2026-11-05) ───────────────────────────────────────────────────────────────────────────────
+// Pedido del usuario: anota al TERMINAR la serie, así que el descanso parte al anotar. «A mí me sirve mucho más esperar de
+// 120 a 150 segundos en algunos casos»: cada ejercicio recuerda el descanso que le dejaste con −15/+15; sin eso, la regla.
+
+const REST_MIN = 15, REST_MAX = 600;
+const de5 = (x: number) => Math.round(x / 5) * 5;
+
+/**
+ * Cuánto descansar después de esta serie (s). 0 = sin descanso (cardio). Calentamiento, siempre 45 s. Lo guardado para el
+ * ejercicio manda; si no hay, según el esfuerzo (como restOf) y 30 s más en los ejercicios grandes: en multiarticulares
+ * pesados, descansar 2 min o más rinde mejor.
+ */
+export function restTarget(s: ForgeState, ex: ForgeExercise, set: FSet): number {
+  if (ex.eq === 'cardio') return 0;
+  if (set.warmup) return 45;
+  const guardado = s.restPrefs?.[ex.id];
+  if (typeof guardado === 'number' && guardado >= REST_MIN) return guardado;
+  if (ex.unit === 'seg') return 60;
+  const base = set.rir == null ? 90 : set.rir <= 0 ? 120 : set.rir >= 3 ? 60 : 90;
+  return base + (ex.big ? 30 : 0) + (set.tail ? TAIL_REST : 0);
+}
+
+// ─── Entre ejercicios y ejercicios unidos (2026-11-06) ───────────────────────────────────────────────────────────────
+// El usuario descansa ~2:30 entre series y más entre ejercicios. NO hay un estudio directo sobre el descanso entre ejercicios:
+// lo más cercano dice que importa si el siguiente usa los mismos músculos (Willardson 2006; Ratamess 2012). Por eso la regla es
+// solo un punto de partida (3 min con músculos en común, 2 sin) y lo que dejes con −15/+15 queda guardado aparte.
+
+export const BETWEEN_KEY = '__entre';
+/** Unidos: solo lo que tardas en cambiar de ejercicio */
+export const LINK_SECS = 15;
+
+/** Cuánto descansar al cambiar de ejercicio (s). Lo que dejaste manda; si no, según si comparten músculos principales. */
+export function betweenRest(s: ForgeState, ex: ForgeExercise, next?: ForgeExercise | null): number {
+  const guardado = s.restPrefs?.[BETWEEN_KEY];
+  if (typeof guardado === 'number' && guardado >= REST_MIN) return guardado;
+  const principales = (e?: ForgeExercise | null) => Object.entries((e?.m ?? {}) as Record<string, number>).filter(([, p]) => p >= 2).map(([k]) => k);
+  const comparten = principales(ex).some((k) => principales(next).includes(k));
+  return comparten ? 180 : 120;
+}
+
+export type RestKind = 'serie' | 'cambio' | 'enlace' | 'calent';
+export interface AfterSet { secs: number; text: string; fin: boolean; kind: RestKind; /** dónde se guarda lo que ajustes (null = no se guarda) */ saveAs: string | null }
+
+/** Qué pasa después de anotar: cuánto descansar, qué viene y dónde queda lo que ajustes con −15/+15. */
+export function afterSetPlan(s: ForgeState, day: string, ex: ForgeExercise, set: FSet): AfterSet {
+  const cat = catalog(s);
+  const nx = nextAfterSet(s, day, ex.id);
+  const plan = s.plan || {};
+  const hechas = (id: string) => (((s.sessions || {})[day] || {})[id] || []).filter((x) => !x.warmup).length;
+  if (set.warmup) return { secs: restTarget(s, ex, set), text: nx.text, fin: nx.fin, kind: 'calent', saveAs: null };
+  const base = restTarget(s, ex, set);
+  if (!base) return { secs: 0, text: nx.text, fin: nx.fin, kind: 'serie', saveAs: null };
+  const chain = linkChain(s, ex.id).filter((id) => cat[id]);
+  if (chain.length > 1) {
+    const sig = chain[chain.indexOf(ex.id) + 1];
+    if (sig && hechas(sig) < hechas(ex.id) && hechas(sig) < plan[sig]) return { secs: LINK_SECS, text: `Sigue: ${cat[sig].name}, sin descanso`, fin: false, kind: 'enlace', saveAs: null };
+    const falta = chain.find((id) => hechas(id) < plan[id]);
+    if (falta) {
+      const g = s.restPrefs?.[chain[0]];
+      const secs = typeof g === 'number' && g >= REST_MIN ? g : Math.max(...chain.map((id) => restTarget(s, cat[id], set)));
+      return { secs, text: `Ronda ${Math.min(...chain.map(hechas)) + 1}: ${cat[falta].name}`, fin: false, kind: 'serie', saveAs: chain[0] };
+    }
+  }
+  if (nx.fin) return { secs: 0, text: nx.text, fin: true, kind: 'serie', saveAs: null };
+  if (plan[ex.id] != null && hechas(ex.id) >= plan[ex.id]) {
+    const otro = Object.keys(plan).find((id) => cat[id] && hechas(id) < plan[id]);
+    return { secs: betweenRest(s, ex, otro ? cat[otro] : null), text: nx.text, fin: false, kind: 'cambio', saveAs: BETWEEN_KEY };
+  }
+  return { secs: base, text: nx.text, fin: false, kind: 'serie', saveAs: ex.id };
+}
+
+/** Tus descansos reales (lo que anotaste en los últimos `days` días): entre series y entre ejercicios, sin contar la serie. */
+export function restStats(s: ForgeState, days = 60, now: Date = L.forgeNow()): { sets: { n: number; med: number }; between: { n: number; med: number } } {
+  const cat = catalog(s);
+  const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const desde = key(new Date(now.getTime() - days * 86_400_000));
+  const sets: number[] = [], between: number[] = [];
+  const esNeg = (id: string) => /negativ/i.test(id);
+  for (const [day, exs] of Object.entries(s.sessions || {})) {
+    if (day < desde) continue;
+    const filas = Object.entries(exs).flatMap(([id, list]) => (list || []).filter((x) => !x.warmup && x.at && key(new Date(x.at)) === day).map((x) => ({ id, x })));
+    filas.sort((a, b) => a.x.at! - b.x.at!);
+    for (let i = 1; i < filas.length; i++) {
+      const a = filas[i - 1], b = filas[i];
+      if (!cat[b.id] || (esNeg(b.id) && !esNeg(a.id))) continue; // pronas → negativas: era la misma serie, sin descanso
+      const g = (b.x.at! - a.x.at!) / 1000 - setWorkSeconds(cat[b.id], b.x);
+      if (g < 30 || g > 1200) continue; // anotar de golpe o irse a otra cosa no es descanso
+      (a.id === b.id || (esNeg(a.id) && !esNeg(b.id) && cat[a.id]?.pattern === cat[b.id].pattern) ? sets : between).push(g);
+    }
+  }
+  const med = (xs: number[]) => (xs.length ? r0([...xs].sort((p, q) => p - q)[Math.floor(xs.length / 2)]) : 0);
+  return { sets: { n: sets.length, med: med(sets) }, between: { n: between.length, med: med(between) } };
+}
+
+// ─── Tu avance con remate ────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface TailSession { day: string; rounds: Array<{ strict: number; tail: number }> }
+
+/** Las sesiones con remate de un ejercicio, también las de antes, cuando las negativas iban en otra línea del mismo día. */
+export function tailHistory(s: ForgeState, exId: string, n = 6): TailSession[] {
+  const cat = catalog(s);
+  const ex = cat[exId];
+  if (!ex) return [];
+  const out: TailSession[] = [];
+  for (const day of Object.keys(s.sessions || {}).sort()) {
+    const sess = s.sessions[day] || {};
+    const w = (sess[exId] || []).filter((x) => !x.warmup);
+    if (!w.length) continue;
+    const negId = /negativ/i.test(exId) ? null : Object.keys(sess).find((id) => id !== exId && /negativ/i.test(id) && cat[id]?.pattern === ex.pattern);
+    const negs = negId ? (sess[negId] || []).filter((x) => !x.warmup) : [];
+    const rounds = w.map((x, i) => ({ strict: x.reps, tail: x.tail?.reps ?? negs[i]?.reps ?? 0 }));
+    if (rounds.some((r) => r.tail > 0)) out.push({ day, rounds });
+  }
+  return out.slice(-n);
+}
+
+/** «Estrictas en la primera ronda: 3 → 5 → 6 · Total por ronda: 8 → 8 → 10». null si no hay remates. */
+export function tailLine(s: ForgeState, exId: string): string | null {
+  const h = tailHistory(s, exId, 3);
+  if (!h.length) return null;
+  const total = (r: { strict: number; tail: number }) => r.strict + r.tail;
+  const mejor = (x: TailSession) => Math.max(...x.rounds.map(total));
+  if (h.length === 1) return `La última: ${h[0].rounds.map((r) => `${r.strict}+${r.tail}`).join(' · ')}`;
+  return `Estrictas en la primera ronda: ${h.map((x) => x.rounds[0].strict).join(' → ')} · Total por ronda: ${h.map(mejor).join(' → ')}`;
+}
+
+/** Guarda el descanso de un ejercicio (de 5 en 5 s, entre 15 s y 10 min). */
+export function setRestPref(s: ForgeState, exId: string, secs: number): ForgeState {
+  const v = Math.max(REST_MIN, Math.min(REST_MAX, de5(secs)));
+  if (s.restPrefs?.[exId] === v) return s;
+  return { ...s, restPrefs: { ...(s.restPrefs || {}), [exId]: v } };
+}
+
+/**
+ * La serie con el descanso que de verdad hubo antes de ella. Como se anota al TERMINAR, entre dos anotaciones está el
+ * descanso MÁS la serie nueva: se le resta lo que dura. Solo hoy, y solo si da algo creíble (anotar varias de una vez o
+ * irse a otra cosa no cuenta como descanso). Lo que se mide reemplaza al descanso supuesto en el gasto (restOf).
+ */
+export function withMeasuredRest(s: ForgeState, day: string, ex: ForgeExercise, set: FSet, now: number = L.forgeNow().getTime()): FSet {
+  const { rest: _antes, ...limpia } = set;
+  if (day !== L.todayKey()) return limpia;
+  let ultima = 0;
+  for (const series of Object.values((s.sessions || {})[day] || {})) for (const x of series) if ((x.at ?? 0) > ultima) ultima = x.at!;
+  if (!ultima) return limpia;
+  const r = de5((now - ultima) / 1000 - setWorkSeconds(ex, set));
+  return r >= REST_MIN && r <= REST_MAX ? { ...limpia, rest: r } : limpia;
+}
+
+const cargaTxt = (ex: ForgeExercise, x: FSet): string => {
+  if (ex.eq === 'asist') return x.assist ? `asistida ${x.assist} ${x.unit ?? 'kg'}` : '';
+  if (ex.eq === 'banda') return '';
+  if (!x.kg) return '';
+  return ex.eq === 'bw' ? `+${x.kg} kg` : `${x.kg} ${x.unit ?? 'kg'}`;
+};
+const repsTxt = (ex: ForgeExercise, reps: number, conCarga: boolean) => (ex.unit === 'seg' ? `${reps} s` : ex.unit === 'min' ? `${reps} min` : conCarga ? `× ${reps}` : `${reps} ${reps === 1 ? 'rep' : 'reps'}`);
+
+/** Lo que sigue después de anotar: otra serie de este, el próximo del plan, o `fin` si ya está todo el plan de hoy. */
+export function nextAfterSet(s: ForgeState, day: string, exId: string): { text: string; fin: boolean } {
+  const cat = catalog(s);
+  const ex = cat[exId];
+  const hechas = (id: string) => (((s.sessions || {})[day] || {})[id] || []).filter((x) => !x.warmup);
+  const plan = s.plan || {};
+  const ids = Object.keys(plan).filter((id) => cat[id]);
+  const propia = hechas(exId);
+  const ultima = ((s.sessions || {})[day] || {})[exId]?.slice(-1)[0];
+  const esta = () => {
+    const carga = cargaTxt(ex, ultima!);
+    const tail = ultima!.tail;
+    if (tail) return `${carga ? `${carga} ` : ''}${ultima!.reps} + ${tail.kind === 'neg' ? `${tail.reps} neg.` : tailText(tail)}`; // cabe en la barra
+    return [carga, repsTxt(ex, ultima!.reps, !!carga)].filter(Boolean).join(' ');
+  };
+  if (plan[exId] == null) return { text: ultima ? `Otra serie: ${esta()}` : 'Otra serie', fin: false };
+  if (propia.length < plan[exId]) return { text: `Serie ${propia.length + 1} de ${plan[exId]}${ultima ? ` · ${esta()}` : ''}`, fin: false };
+  const otro = ids.find((id) => hechas(id).length < plan[id]);
+  return otro ? { text: `Sigue: ${cat[otro].name}`, fin: false } : { text: 'Plan de hoy listo', fin: true };
+}
+
+/** La primera serie de trabajo de la última vez que hiciste este ejercicio (antes de `day`). */
+export function firstSetLastTime(s: ForgeState, exId: string, day: string): FSet | null {
+  for (const d of Object.keys(s.sessions || {}).filter((x) => x < day).sort().reverse()) {
+    const w = (s.sessions[d][exId] || []).filter((x) => !x.warmup);
+    if (w.length) return w[0];
+  }
+  return lastSetOf(s, exId);
+}
+
+/** Para el cronómetro de un ejercicio por tiempo: el objetivo de la rutina o tu última marca (en segundos). */
+export function timedGoal(s: ForgeState, day: string, ex: ForgeExercise): { secs: number; label: string } | null {
+  const k = ex.unit === 'min' ? 60 : 1;
+  const t = s.planDay?.day === day ? s.planDay?.targets?.[ex.id] : null;
+  if (t?.repMin) return { secs: t.repMin * k, label: 'Objetivo' };
+  const u = lastSetOf(s, ex.id);
+  return u?.reps ? { secs: u.reps * k, label: 'Tu última' } : null;
 }
 
 /** kcal netas de una serie (sobre el reposo). */
 export function setKcal(s: ForgeState, ex: ForgeExercise, set: FSet, e1rm?: number | null): number {
   const body = set.body ?? s.bodyKg ?? 70;
   const met = setMet(ex, set, e1rm, effKg(s, ex, set));
-  return Math.max(0, (met - 1) * 0.0175 * body * setMinutes(ex, set));
+  // Las negativas pesan harto en el músculo y poco en la energía
+  const descuento = set.tail?.kind === 'neg' ? (tailSeconds(set) * (1 - NEG_ENERGY)) / 60 : 0;
+  return Math.max(0, (met - 1) * 0.0175 * body * (setMinutes(ex, set) - descuento));
 }
 
 /** El gasto de un día de entreno (todas sus series). */

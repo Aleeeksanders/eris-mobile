@@ -46,6 +46,8 @@
         "android.permission.health.READ_HYDRATION",
         "android.permission.health.WRITE_HYDRATION",
         "android.permission.VIBRATE",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.CAMERA"
       ]
     },

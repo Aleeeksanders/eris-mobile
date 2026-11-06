@@ -199,12 +199,17 @@ export interface Voice {
   s: (tu: string, ud: string) => string;
   /** un emoji al final (nunca de usted) */
   e: (emoji: string) => string;
-  /** un remate, solo con humor */
-  h: (extra: string) => string;
+  /** tono «brígida» (2026-11-05): sin emojis, con su propio remate */
+  brigida: boolean;
+  /** un remate: el de humor, o el brígido si se da */
+  h: (extra: string, brigido?: string) => string;
 }
 export function voice(tone: Tone = 'directo'): Voice {
-  const usted = tone === 'usted', humor = tone === 'humor';
-  return { usted, humor, s: (tu, ud) => (usted ? ud : tu), e: (emoji) => (usted ? '' : ` ${emoji}`), h: (extra) => (humor ? ` ${extra}` : '') };
+  const usted = tone === 'usted', humor = tone === 'humor', brigida = tone === 'brigida';
+  return {
+    usted, humor, brigida, s: (tu, ud) => (usted ? ud : tu), e: (emoji) => (usted || brigida ? '' : ` ${emoji}`),
+    h: (extra, brigido) => (humor ? ` ${extra}` : brigida && brigido ? ` ${brigido}` : ''),
+  };
 }
 const checkTitle = (v: Voice, slot: string): string => {
   const t: Record<string, string> = {
@@ -426,7 +431,7 @@ export function planReminders(i: PlanInput, opts: { raw?: boolean } = {}): Plann
         if (water >= expected * WATER_BEHIND) continue;
         push({ id: `water-${t}`, kind: 'water', category: 'water', prio: PRIORITY.water, shiftable: true, minutes: t,
           title: water > 0 ? `${v.s('Vas', 'Va')} en ${liters(water)} de agua${v.humor ? ' 💧' : ''}` : `Aún no ${v.s('anotas', 'anota')} agua hoy${v.humor ? ' 🌵' : ''}`,
-          body: `A esta hora lo ideal es ir en ~${liters(expected)} de ${tus} ${liters(i.waterGoal)}. ¿Un vaso ahora?${v.h('Tu cuerpo te lo va a agradecer 💧')}` });
+          body: `A esta hora lo ideal es ir en ~${liters(expected)} de ${tus} ${liters(i.waterGoal)}. ¿Un vaso ahora?${v.h('Tu cuerpo te lo va a agradecer 💧', 'Sin cuento.')}` });
       }
     }
 
@@ -483,7 +488,7 @@ export function planReminders(i: PlanInput, opts: { raw?: boolean } = {}): Plann
         if (idle >= FINANCE_IDLE_DAYS) {
           push({ id: 'finance-idle', kind: 'finance', category: 'finance', prio: PRIORITY.idle, shiftable: true, minutes: FINANCE_AT,
             title: `${v.s('Tus', 'Sus')} finanzas llevan ${idle} días sin movimientos`,
-            body: `${v.s('¿Compraste algo? Cuéntamelo', '¿Compró algo? Cuéntemelo')} ("gasté 5 lucas en almuerzo") y lo anoto.${v.h('Tu yo del futuro te lo agradece 🫡')}` });
+            body: `${v.s('¿Compraste algo? Cuéntamelo', '¿Compró algo? Cuéntemelo')} ("gasté 5 lucas en almuerzo") y lo anoto.${v.h('Tu yo del futuro te lo agradece 🫡', 'Plata que no se anota, plata que se pierde.')}` });
         }
       }
       for (const p of fin.proximos ?? []) {
@@ -542,7 +547,7 @@ export function planReminders(i: PlanInput, opts: { raw?: boolean } = {}): Plann
       const cafePlan = cues.some((c) => c.cue === 'cafe' || c.cue === 'siesta_cafe');
       if (sl.coffeeAfternoon && !(isToday && (sl.lateCaffeineToday || cafePlan)) && cafMin >= 12 * 60) {
         push({ id: 'sleep-coffee', kind: 'sleep', prio: PRIORITY.coffee, shiftable: true, minutes: cafMin,
-          title: `Último café${v.e('☕')}`, body: `Hasta las ${fmt(sl.caffeineUntil)} ${v.s('puedes', 'puede')} tomar café; después, mejor sin cafeína para dormir bien.${v.h('Tu yo de mañana lo agradece 😴')}` });
+          title: `Último café${v.e('☕')}`, body: `Hasta las ${fmt(sl.caffeineUntil)} ${v.s('puedes', 'puede')} tomar café; después, mejor sin cafeína para dormir bien.${v.h('Tu yo de mañana lo agradece 😴', 'Sin excepciones.')}` });
       }
       // A acostarse: solo si el horario se viene corriendo, hay deuda o un plan en curso (si duerme bien, no se le molesta)
       if (sl.drifting || sl.debtH >= 3 || sl.plan) {
@@ -587,7 +592,7 @@ export function planReminders(i: PlanInput, opts: { raw?: boolean } = {}): Plann
           if (i.proteinGoal && !i.proteinIsCap) bits.push(`${Math.round(protein)} de ${Math.round(i.proteinGoal)} g de proteína`);
           if (i.waterGoal) bits.push(`${liters(water)} de ${liters(i.waterGoal)} de agua`);
           title = dinnerDone ? `Cierre del día${v.humor ? ' 🌙' : ''}` : checkTitle(v, dinner.slot);
-          body = `Hoy ${llevas.toLowerCase()} ${bits.join(', ')}. ${dinnerDone ? `¿${v.s('Te', 'Le')} faltó anotar algo?${v.h('Sin juicio, prometido 🤞')}` : `${v.s('Cuéntame', 'Cuénteme')} y cierro ${tu} día.`}`;
+          body = `Hoy ${llevas.toLowerCase()} ${bits.join(', ')}. ${dinnerDone ? `¿${v.s('Te', 'Le')} faltó anotar algo?${v.h('Sin juicio, prometido 🤞', 'Sin juicio, pero sin mentiras.')}` : `${v.s('Cuéntame', 'Cuénteme')} y cierro ${tu} día.`}`;
         }
         out.push({ id: 'close', kind: 'summary', category: 'meal', prio: 0, shiftable: false, at: atMinutes(day, CLOSE_AT), title, body });
       }

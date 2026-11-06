@@ -56,9 +56,44 @@ L.setTrainXpOf((v: any) => {
   return Math.round(wLegacy * L.GEN_WORK_FACTOR * M + fresh);
 });
 
+/**
+ * El remate (2026-11-06): lo que sigues haciendo SIN descanso cuando ya no sale otra repetición («pronas al fallo y las que me
+ * quedan con negativas»). Es parte de la misma serie: un solo descanso, un solo registro. `reps` de la serie sigue siendo lo
+ * estricto, así la fuerza y los récords no se inflan con lo del remate. Evidencia: AXS/25 Laboratorio/Series con Remate.
+ */
+export type TailKind = 'neg' | 'ayuda' | 'peso' | 'pausa';
+export interface SetTail {
+  kind: TailKind;
+  reps: number;
+  /** «bajando peso»: la carga con que seguiste */
+  kg?: number;
+  unit?: 'lb';
+  /** «con ayuda»: la banda o la asistencia con que seguiste */
+  assist?: number;
+  band?: string;
+}
+export const TAIL_NAMES: Record<TailKind, { label: string; one: string; many: string }> = {
+  neg: { label: 'Negativas', one: 'negativa', many: 'negativas' },
+  ayuda: { label: 'Con ayuda', one: 'con ayuda', many: 'con ayuda' },
+  peso: { label: 'Bajando peso', one: 'con menos peso', many: 'con menos peso' },
+  pausa: { label: 'Pausa corta', one: 'tras una pausa', many: 'tras una pausa' },
+};
+/** «4 negativas», «1 negativa», «3 con ayuda» */
+export const tailText = (t: SetTail) => `${t.reps} ${t.reps === 1 ? TAIL_NAMES[t.kind].one : TAIL_NAMES[t.kind].many}`;
+
+/**
+ * Cuánto vale una serie en el volumen de la semana: 1, y 1,5 si lleva un remate de 3 reps o más. ESTIMACIÓN PROPIA, ningún estudio
+ * fija este número: series extendidas muestran crecimiento parecido al de varias series normales (Fink 2018, Ozaki 2018, en
+ * Krzysztofik 2019) y las excéntricas valen por sí solas (ACSM 2026), pero no son dos series con su descanso.
+ */
+export const TAIL_MIN_REPS = 3;
+export const setValue = (x: FSet): number => (x.warmup ? 0 : 1 + ((x.tail?.reps ?? 0) >= TAIL_MIN_REPS ? 0.5 : 0));
+
 /** Una serie. `reps` son segundos en los isométricos y minutos en el cardio. */
 export interface FSet {
   reps: number;
+  /** lo que seguiste haciendo sin descanso al no salir más (no se suma a `reps`) */
+  tail?: SetTail;
   /** carga: la mancuerna (una), el total de barra, lo que marca la máquina, el lastre en peso corporal */
   kg?: number;
   /** unidad de la máquina (solo si es lb) */
@@ -106,6 +141,16 @@ export interface ForgeState {
   classes: string[];
   sessions: Sessions;
   gym: Gym | null;
+  /** el descanso de cada ejercicio (s): lo que dejaste con −15/+15 en la barra de descanso (forgeTrain.restTarget) */
+  restPrefs?: Record<string, number>;
+  /** ejercicios que van con remate: dom_prona → negativas, y si reemplaza a otro del plan (dom_negativa) */
+  tailPlan?: Record<string, { kind: TailKind; replaces?: string }>;
+  /** las veces que dijiste «ahora no» a juntar dos ejercicios en una serie con remate */
+  tailDismissed?: string[];
+  /** ejercicios unidos, sin descanso entre ellos: A → B */
+  planLinks?: Record<string, string>;
+  /** lo que dijiste de tus músculos después de entrenar (forgeRecovery): las últimas 120 respuestas */
+  soreness?: Array<{ at: number; level: 'nada' | 'molesta' | 'limita'; subs: string[]; day: string }>;
   /** lo que llega del teléfono y del servidor */
   autoLevel?: any;
   activityMode?: 'auto' | 'manual';
@@ -243,7 +288,7 @@ export function rpgView(s: ForgeState): ForgeState {
       const energy = L.exEnergy(s, exId);
       for (const set of work) {
         const kg = rpgLoadOf(s, ex, set);
-        const r = set.rpgReps ?? set.reps;
+        const r = set.rpgReps ?? set.reps + (set.tail?.reps ?? 0); // el remate también es trabajo
         // lo migrado cuenta con la intensidad del HTML al migrar; lo nuevo, con la de cada serie
         const vm = set.rpgKg != null ? null : Math.round(setIntensityMult(kg, set.body ?? (s.bodyKg || 70)) * 1000) / 1000;
         const vid = `${exId}@${kg}@${r}${vm == null ? '' : `@${vm}`}`;
@@ -520,6 +565,89 @@ export function setPlanTarget(s: ForgeState, exId: string, delta: number): Forge
   return { ...s, plan: p };
 }
 export const clearPlan = (s: ForgeState): ForgeState => ({ ...s, plan: {} });
+
+// ─── Remate y ejercicios unidos ───
+
+/** Lo que se juntó en una serie con remate no vuelve al plan cuando se carga un día de la rutina o se repite un día. */
+export function dropJoined<T>(s: ForgeState, plan: Record<string, number>, targets?: Record<string, T>): void {
+  for (const [main, t] of Object.entries(s.tailPlan || {})) {
+    if (!t.replaces || plan[main] == null || plan[t.replaces] == null) continue;
+    plan[main] = Math.max(plan[main], plan[t.replaces]);
+    delete plan[t.replaces];
+    if (targets) delete targets[t.replaces];
+  }
+}
+
+/** ¿Hay en el plan un ejercicio y sus negativas como dos líneas? Se ofrece juntarlos (dom_prona + dom_negativa). */
+export function joinOffer(s: ForgeState): { main: string; tail: string } | null {
+  const cat = catalog(s);
+  const ids = Object.keys(s.plan || {}).filter((id) => cat[id]);
+  for (const tail of ids) {
+    if (!/negativ/i.test(`${tail} ${cat[tail].name}`)) continue;
+    const main = ids.find((id) => id !== tail && cat[id].pattern === cat[tail].pattern && !/negativ/i.test(`${id} ${cat[id].name}`));
+    if (main && !s.tailPlan?.[main] && !(s.tailDismissed || []).includes(main)) return { main, tail };
+  }
+  return null;
+}
+
+/** Junta dos líneas del plan en una serie con remate. El descanso que dejaste para cualquiera de las dos queda en la principal. */
+export function joinAsTail(s: ForgeState, main: string, tail: string, kind: TailKind = 'neg'): ForgeState {
+  const plan = { ...(s.plan || {}) };
+  if (plan[main] == null) plan[main] = plan[tail] ?? 3;
+  plan[main] = Math.max(plan[main], plan[tail] ?? 0);
+  delete plan[tail];
+  const prefs = { ...(s.restPrefs || {}) };
+  const pref = Math.max(prefs[main] ?? 0, prefs[tail] ?? 0);
+  if (pref) prefs[main] = pref;
+  const planDay = (s as any).planDay;
+  const targets = planDay?.targets ? { ...planDay.targets } : null;
+  if (targets) delete targets[tail];
+  return { ...s, plan, restPrefs: prefs, tailPlan: { ...(s.tailPlan || {}), [main]: { kind, replaces: tail } }, ...(targets ? { planDay: { ...planDay, targets } } : {}) } as ForgeState;
+}
+
+/** Deshace lo anterior: vuelven a ser dos líneas. */
+export function splitTail(s: ForgeState, main: string): ForgeState {
+  const t = s.tailPlan?.[main];
+  if (!t) return s;
+  const tailPlan = { ...s.tailPlan };
+  delete tailPlan[main];
+  const plan = { ...(s.plan || {}) };
+  if (t.replaces && plan[main] != null) plan[t.replaces] = plan[main];
+  return { ...s, plan, tailPlan, tailDismissed: [...(s.tailDismissed || []).filter((x) => x !== main), main] };
+}
+
+/** «Ahora no» a juntarlos: no se vuelve a ofrecer para ese ejercicio. */
+export const dismissJoin = (s: ForgeState, main: string): ForgeState => ({ ...s, tailDismissed: [...(s.tailDismissed || []).filter((x) => x !== main), main] });
+
+/** Une A con B (sin descanso entre ellos), o los separa si ya estaban unidos. */
+export function toggleLink(s: ForgeState, a: string, b: string): ForgeState {
+  const links = { ...(s.planLinks || {}) };
+  if (links[a] === b) delete links[a];
+  else {
+    for (const k of Object.keys(links)) if (links[k] === b) delete links[k];
+    links[a] = b;
+  }
+  return { ...s, planLinks: links };
+}
+
+/** Los ejercicios unidos con este, en orden (solo los que están en el plan). Sin unir: él solo. */
+export function linkChain(s: ForgeState, exId: string): string[] {
+  const links = s.planLinks || {};
+  const plan = s.plan || {};
+  if (plan[exId] == null) return [exId];
+  let first = exId;
+  const vistos = new Set([exId]);
+  for (;;) {
+    const prev = Object.keys(links).find((k) => links[k] === first && plan[k] != null);
+    if (!prev || vistos.has(prev)) break;
+    vistos.add(prev);
+    first = prev;
+  }
+  const out = [first];
+  let cur = first;
+  while (links[cur] && plan[links[cur]] != null && !out.includes(links[cur])) { cur = links[cur]; out.push(cur); }
+  return out;
+}
 
 /** El plan que arma Eris (TrainingPlanTool): idempotente, no duplica ejercicios. Igual que el puente del HTML. */
 export function applyPlan(s: ForgeState, payload: any): ForgeState {

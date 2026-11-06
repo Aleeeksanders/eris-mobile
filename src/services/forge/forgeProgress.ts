@@ -59,6 +59,8 @@ export function exerciseHistory(s: ForgeState, exId: string, from = '0000-00-00'
       if (v != null && (e1 == null || v > e1)) e1 = v;
       if (load > topLoad || (load === topLoad && x.reps > topReps)) { topLoad = load; topReps = x.reps; best = x; }
       volume += x.reps * load * (ex.pair ? 2 : 1);
+      // El remate suma al volumen con la carga que tuvo; la fuerza y los récords siguen saliendo solo de lo estricto
+      if (x.tail) volume += x.tail.reps * (x.tail.kind === 'peso' ? effKg(s, ex, { ...x, kg: x.tail.kg, unit: x.tail.unit }) : x.tail.kind === 'ayuda' ? effKg(s, ex, { ...x, assist: x.tail.assist, band: x.tail.band }) : load) * (ex.pair ? 2 : 1);
     }
     out.push({ day, e1rm: e1, topLoad, topReps, maxReps: Math.max(...w.map((x) => x.reps)), volume: Math.round(volume), sets: w.length, best });
   }

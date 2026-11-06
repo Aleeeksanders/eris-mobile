@@ -17,12 +17,18 @@ import { PersonaStore, personaName } from '../config/persona';
 import { plainPreview, glucoseCopy, COLORS } from './notificationCopy';
 import { DEFAULT_REMINDER_SETTINGS, type PlannedReminder, type ReminderSettings } from './reminderRules';
 
-type Kind = 'glucose_urgent' | 'glucose' | 'reply' | 'tip' | 'approval' | 'meal' | 'water' | 'training' | 'finance' | 'summary' | 'supplement' | 'sleep' | 'focus' | 'finance_auto';
+type Kind = 'glucose_urgent' | 'glucose' | 'reply' | 'tip' | 'approval' | 'meal' | 'water' | 'training' | 'finance' | 'summary' | 'supplement' | 'sleep' | 'focus' | 'finance_auto' | 'rest';
 
 const { AndroidImportance, AndroidNotificationVisibility } = Notifications;
 
 /** Canales de Android: nombre y descripción los ve el usuario en Ajustes → Notificaciones de Eris. */
 const CHANNELS: Record<Kind, Notifications.NotificationChannelInput & { id: string }> = {
+  // Fin del descanso en Forge (2026-11-05): vibra y se ve con la pantalla bloqueada, sin sonido para no cortar la música
+  rest: {
+    id: 'eris-forge-descanso', name: 'Descanso entre series', description: 'Vibra cuando se acaba tu descanso en Forge. Sin sonido, para no cortar tu música.',
+    importance: AndroidImportance.HIGH, vibrationPattern: [0, 300, 150, 300], lightColor: '#F5C542', sound: null,
+    lockscreenVisibility: AndroidNotificationVisibility.PUBLIC, enableVibrate: true,
+  },
   glucose_urgent: {
     id: 'eris-salud-urgente', name: 'Alertas urgentes de salud',
     description: 'Glucosa en un rango peligroso. Suenan y aparecen aunque estés en otra app.',
@@ -533,6 +539,27 @@ class ErisNotificationsService {
       return;
     }
     DeviceEventEmitter.emit(NOTIFICATION_OPEN_EVENT, this.toOpen(resp));
+  }
+
+  /**
+   * El aviso de Forge a una hora exacta (fin del descanso, objetivo del cronómetro). Con la app abierta no se muestra: vibra
+   * la app. Tocarlo vuelve a Forge. Se reemplaza por identificador.
+   */
+  async forgeAlarm(id: string, at: number, title: string, body: string) {
+    await this.init();
+    try {
+      await Notifications.scheduleNotificationAsync({
+        identifier: id,
+        content: { title, body, data: { kind: 'rest', tap: 'forge' }, sound: false, ...(Platform.OS === 'android' ? { color: '#F5C542' } : {}) },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(at), ...(Platform.OS === 'android' ? { channelId: CHANNELS.rest.id } : {}) },
+      });
+    } catch {}
+  }
+
+  /** Quita ese aviso: si todavía no sonaba y si ya está en la bandeja. */
+  async cancelForgeAlarm(id: string) {
+    await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
+    await Notifications.dismissNotificationAsync(id).catch(() => {});
   }
 
   private async show(kind: Kind, content: Notifications.NotificationContentInput, identifier?: string): Promise<string | null> {

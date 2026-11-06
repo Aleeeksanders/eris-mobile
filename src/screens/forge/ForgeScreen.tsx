@@ -23,6 +23,21 @@ import { sleepReadiness, lastSleepFrom } from '../../services/sleep/sleepCore';
 import ForgeShell from './ForgeShell';
 import { FG } from './theme';
 import { useForgeAct } from './useForge';
+import { restTimer } from '../../services/forge/restTimer';
+import { erisNotifications } from '../../services/ErisNotifications';
+import { getTone, TONE_CHANGED_EVENT, type Tone } from '../../services/tone';
+
+// El aviso del descanso con la pantalla bloqueada (vibra, sin sonido) y el del objetivo del cronómetro
+const ALARMA_DESCANSO = 'eris-forge-descanso', ALARMA_OBJETIVO = 'eris-forge-objetivo';
+let tonoAlarma: Tone | null = null;
+void getTone().then((t) => { tonoAlarma = t; });
+DeviceEventEmitter.addListener(TONE_CHANGED_EVENT, (t: Tone) => { tonoAlarma = t; });
+restTimer.alarm = {
+  schedule: (at, next) => { void erisNotifications.forgeAlarm(ALARMA_DESCANSO, at, tonoAlarma === 'brigida' ? 'Ya po, te toca' : 'Se acabó el descanso', next); },
+  cancel: () => { void erisNotifications.cancelForgeAlarm(ALARMA_DESCANSO); },
+  goal: (at, body) => { void erisNotifications.forgeAlarm(ALARMA_OBJETIVO, at, 'Llegaste a tu objetivo', body); },
+  cancelGoal: () => { void erisNotifications.cancelForgeAlarm(ALARMA_OBJETIVO); },
+};
 export { useForgeUi, type Tab } from './forgeUi';
 
 interface Props {

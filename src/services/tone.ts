@@ -3,7 +3,8 @@
 //
 // Pedido del usuario (2026-10-14): "que el lenguaje sea según la generación de la persona, para que se sientan mejor
 // acompañados". La edad SOLO sugiere uno (la que Forge conoce, vía el servidor); la persona elige en la bienvenida o en
-// Perfil. Los datos son los mismos en los tres: cambia la forma, nunca el contenido. Se usa en los avisos del día
+// Perfil. Los datos son los mismos en todos: cambia la forma, nunca el contenido. «Brígida» (2026-11-05): el veredicto
+// primero, sin emojis, pica si te quedas; nunca con el cuerpo ni la comida. Se usa en los avisos del día
 // (reminderRules.ts), en la comida concreta de los avisos (servidor: NudgeSuggest.ts) y en el chat (servidor: Tone.ts).
 // La clave se guarda por cuenta (ScopedStorage) y se manda al servidor al conectar.
 // ============================================================
@@ -11,7 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter } from 'react-native';
 import { wsManager } from './WebSocketManager';
 
-export type Tone = 'humor' | 'directo' | 'usted';
+export type Tone = 'humor' | 'directo' | 'usted' | 'brigida';
 export const DEFAULT_TONE: Tone = 'directo';
 const KEY = 'eris_tone';
 export const TONE_CHANGED_EVENT = 'ERIS_TONE_CHANGED';
@@ -24,9 +25,12 @@ export const TONE_OPTIONS: Array<{ id: Tone; label: string; sub: string; example
     example: 'Te falta fibra a esta hora. Un puñado de almendras te da ~3,5 g. Acompáñalo con un vaso de agua.' },
   { id: 'usted', label: 'De usted', sub: 'Respetuoso, sin emojis',
     example: 'Le falta fibra a esta hora. Un puñado de almendras le aporta ~3,5 g. Acompáñelo con un vaso de agua.' },
+  // 2026-11-05, pedido del usuario: «me gustaría que fuera más brígida, tú me entiendes»
+  { id: 'brigida', label: 'Brígida', sub: 'Sin anestesia: el veredicto primero y te pica si te quedas',
+    example: 'Vas corto de fibra. Un puñado de almendras te da ~3,5 g. Y un vaso de agua, sin cuento.' },
 ];
 
-export const isTone = (x: unknown): x is Tone => x === 'humor' || x === 'directo' || x === 'usted';
+export const isTone = (x: unknown): x is Tone => x === 'humor' || x === 'directo' || x === 'usted' || x === 'brigida';
 
 /** El tono elegido; null si la persona todavía no eligió. */
 export async function getTone(): Promise<Tone | null> {

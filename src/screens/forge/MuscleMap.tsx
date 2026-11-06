@@ -1,7 +1,7 @@
 // ============================================================
 // Forge 2.0 — el personaje con sus músculos (F4; rehecho en la fase I8, 2026-10-23): frente y espalda con los subgrupos
 // del RPG, coloreados por las series de la semana (guía del ACSM: 10–20), por su nivel (subLevel, el mismo del HTML) o por
-// su recuperación (~48 h). Lo atlético (pliometría, equilibrio…) va aparte.
+// su recuperación (rango estimado + lo que dices + cómo rindes: forgeRecovery). Lo atlético (pliometría, equilibrio…) va aparte.
 //
 // El toque se resuelve por COORDENADAS: el mapa entero recibe el toque y se busca qué músculo hay en ese punto (cada
 // músculo es un polígono, en muscleGeometry.ts; se dibuja suavizado). Antes cada figura SVG tenía su `onPress`, que en Android no respondía.
@@ -12,6 +12,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Svg, { Defs, LinearGradient, Stop, Ellipse, Path, G, Line } from 'react-native-svg';
 import * as C from '../../services/forge/forgeCore';
 import * as S from '../../services/forge/forgeStrength';
+import * as Rc from '../../services/forge/forgeRecovery';
 import { FG, FONT, dec } from './theme';
 import { Bar, Chip, H, Label, P, Row, Sheet } from './ui';
 import { useForgeAct } from './useForge';
@@ -23,7 +24,9 @@ type Mode = 'semana' | 'nivel' | 'recuperacion';
 const colorFor = (lvl: number) => (lvl >= 10 ? FG.gold : lvl >= 6 ? FG.red : lvl >= 3 ? FG.coral : '#5d5568');
 const VOL_COLOR: Record<S.VolumeState, string> = { nada: '#2f2a37', bajo: FG.orange, optimo: FG.green, alto: FG.blue };
 const VOL_TEXT: Record<S.VolumeState, string> = { nada: 'sin series', bajo: 'bajo lo recomendado', optimo: 'en el rango óptimo', alto: 'sobre 20: más no suma' };
-const REC_COLOR: Record<S.Recovery['state'], string> = { listo: FG.green, recuperando: FG.orange, sin_datos: '#2f2a37' };
+const REC_COLOR: Record<Rc.RecoveryState, string> = { listo: FG.green, probable: FG.gold, cargado: FG.red, sin_datos: '#2f2a37' };
+/** «33 h», «3 días» */
+const horasTxt = (h: number) => (h < 48 ? `${h} h` : `${Math.round(h / 24)} días`);
 const PALETTE = ['#2f2a37', '#5d5568', FG.coral, FG.red, FG.gold, FG.orange, FG.green, FG.blue];
 
 const lighten = (hex: string, k: number) => {
@@ -48,7 +51,8 @@ export default function MuscleMap({ S: st }: { S: C.ForgeState }) {
   const [sel, setSel] = useState<string | null>(null);
   const { subL } = useMemo(() => C.groupLevels(st), [st]);
   const week = useMemo(() => S.weeklySets(st), [st]);
-  const rec = useMemo(() => Object.fromEntries(Object.keys(L.SUB_BY_ID).map((id) => [id, S.muscleRecovery(st, id)])) as Record<string, S.Recovery>, [st]);
+  const yo = useMemo(() => Rc.personalRecovery(st), [st]);
+  const rec = useMemo(() => Object.fromEntries(Object.keys(L.SUB_BY_ID).map((id) => [id, Rc.muscleRecovery(st, id, undefined, yo)])) as Record<string, Rc.Recovery>, [st, yo]);
   const fill = (sub: string) => (mode === 'nivel' ? colorFor(subL[sub]?.level ?? 1) : mode === 'recuperacion' ? REC_COLOR[rec[sub]?.state ?? 'sin_datos'] : VOL_COLOR[S.volumeState(week[sub] ?? 0)]);
   const shapes = back ? BACK : FRONT;
   const tap = (lx: number, ly: number) => { const hit = muscleAt((lx / W) * 200, (ly / HGT) * 360 + 20, back); if (hit) setSel(hit); };
@@ -113,10 +117,11 @@ export default function MuscleMap({ S: st }: { S: C.ForgeState }) {
           ) : (
             <>
               <Label size={10}>DESCANSO DEL MÚSCULO</Label>
-              {([['listo', 'Listo'], ['recuperando', 'Recuperándose'], ['sin_datos', 'Sin trabajo reciente']] as const).map(([k, t]) => (
+              {([['cargado', 'Recién cargado'], ['probable', 'Probablemente ya rinde'], ['listo', 'Recuperado'], ['sin_datos', 'Sin trabajo reciente']] as const).map(([k, t]) => (
                 <Row key={k} gap={6}><View style={[st2.dot, { backgroundColor: REC_COLOR[k] }]} /><P size={11.5}>{t}</P></Row>
               ))}
-              <P size={11} color={FG.dim}>Un músculo cargado fuerte necesita ~48 h antes de volver a cargarlo (ACSM).</P>
+              <P size={11} color={FG.dim}>Estimado por lo que hiciste; varía de persona a persona. Las agujetas solas no significan que no rinda.</P>
+              <P size={11} color={FG.muted} style={{ marginTop: 2 }}>{yo.texto}</P>
             </>
           )}
           <P size={11} color={FG.muted} style={{ marginTop: 4 }}>Toca un músculo.</P>
@@ -143,7 +148,7 @@ export default function MuscleMap({ S: st }: { S: C.ForgeState }) {
 const agoText = (d: number | null) => (d == null ? '' : d === 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${d} días`);
 
 /** La hoja del músculo: nivel, series de la semana, recuperación, fuerza, en tu rutina y qué lo trabaja. */
-function MuscleSheet({ st, sub, onClose, subL, week, rec }: { st: C.ForgeState; sub: string | null; onClose: () => void; subL: any; week: Record<string, number>; rec: S.Recovery | null }) {
+function MuscleSheet({ st, sub, onClose, subL, week, rec }: { st: C.ForgeState; sub: string | null; onClose: () => void; subL: any; week: Record<string, number>; rec: Rc.Recovery | null }) {
   const act = useForgeAct();
   const ui = useForgeUi();
   const info = sub ? L.SUB_BY_ID[sub] : null;
@@ -160,10 +165,12 @@ function MuscleSheet({ st, sub, onClose, subL, week, rec }: { st: C.ForgeState; 
   const work = S.exercisesFor(st, sub as any, 5);
   const plan: Record<string, number> = st.plan || {};
   const recText = !rec || rec.state === 'sin_datos'
-    ? 'Sin trabajo reciente: listo para entrenarlo.'
-    : rec.state === 'listo'
-      ? `Listo. Lo trabajaste ${agoText(rec.daysAgo)} (${dec(rec.sets)} series).`
-      : `Recuperándose: lo trabajaste ${agoText(rec.daysAgo)} (${dec(rec.sets)} series). ${rec.readyInDays === 1 ? 'Mañana' : `En ${rec.readyInDays} días`} vuelve a estar listo para cargarlo fuerte.`;
+    ? 'Sin trabajo reciente.'
+    : `Lo trabajaste hace ${horasTxt(rec.hoursAgo ?? 0)}: ${dec(rec.sets)} series${rec.fallo >= 0.5 ? ', casi todas cerca del fallo' : ''}${rec.habitual ? '' : ' y no lo entrenas tan seguido'}. Estimado: rinde normal entre ${horasTxt(rec.range![0])} y ${horasTxt(rec.range![1])}.`;
+  const decir = (nivel: Rc.Soreness) => {
+    void act((x) => Rc.recordSoreness(x, nivel, [sub], rec?.lastDay ?? C.L.todayKey()), 'agujetas');
+    ui.toast(0, 'ANOTADO');
+  };
 
   return (
     <Sheet visible onClose={onClose} title={info.name.toUpperCase()}>
@@ -186,6 +193,18 @@ function MuscleSheet({ st, sub, onClose, subL, week, rec }: { st: C.ForgeState; 
         <View style={[st2.dot, { backgroundColor: REC_COLOR[rec?.state ?? 'sin_datos'], marginTop: 4 }]} />
         <P size={12.5} color={FG.text} style={{ flex: 1 }}>{recText}</P>
       </Row>
+      {rec && rec.state !== 'sin_datos' && (rec.hoursAgo ?? 0) >= 12 && (
+        <>
+          <P size={12} style={{ marginTop: 6 }}>¿Cómo lo sientes hoy?</P>
+          <Row gap={6} style={{ marginTop: 4, flexWrap: 'wrap' }}>
+            <Chip label="Sin molestia" on={rec.soreness === 'nada'} onPress={() => decir('nada')} />
+            <Chip label="Agujetas" on={rec.soreness === 'molesta'} onPress={() => decir('molesta')} />
+            <Chip label="Me limita" on={rec.soreness === 'limita'} onPress={() => decir('limita')} />
+          </Row>
+          {rec.soreness === 'molesta' && <P size={11.5} color={FG.dim} style={{ marginTop: 4 }}>Es normal y no significa que no rinda: en gente entrenada la fuerza vuelve antes que el dolor. Calienta y mira tu primera serie.</P>}
+          {rec.soreness === 'limita' && <P size={11.5} color={FG.dim} style={{ marginTop: 4 }}>Hoy mejor otro músculo o baja la carga. Si el dolor es muy fuerte, hay mucha hinchazón u orina oscura, consulta: eso ya no son agujetas normales.</P>}
+        </>
+      )}
 
       {(LIFTS_OF[sub] ?? []).map((lift) => ratings.find((r) => r.lift === lift)).filter(Boolean).slice(0, 2).length > 0 && (
         <>

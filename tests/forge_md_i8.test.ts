@@ -128,15 +128,7 @@ test("objetivo sin hablar de pesos cuando no hay peso que elegir", () => {
   expect(R.nextTarget(s, { exId: "press_banca_db", sets: 3, repMin: 8, repMax: 10, rir: 2 }).why).toMatch(/elige un peso/);
 });
 
-test("recuperación del músculo (~48 h) y el toque por coordenadas", () => {
-  let s = base();
-  const today = C.L.todayKey();
-  for (let k = 0; k < 4; k++) s = C.logSet(s, today, "press_banca", { reps: 8, kg: 60, rir: 2 });
-  const r = Str.muscleRecovery(s, "pec_med");
-  expect(r).toMatchObject({ lastDay: today, daysAgo: 0, sets: 4, state: "recuperando", readyInDays: 2 });
-  expect(Str.muscleRecovery(s, "triceps").sets).toBe(2); // secundario: ½ por serie
-  expect(Str.muscleRecovery(s, "triceps").readyInDays).toBe(1);
-  expect(Str.muscleRecovery(s, "gemelos").state).toBe("sin_datos");
+test("el toque por coordenadas", () => {
   // el toque: el punto cae dentro del polígono (o en el más cercano si toca el borde)
   expect(muscleAt(85, 105, false)).toBe("pec_med");
   expect(muscleAt(115, 105, false)).toBe("pec_med");

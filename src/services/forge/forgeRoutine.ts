@@ -22,10 +22,11 @@
 // recuperación (sueño) 10.
 // ============================================================
 
-import { L, BASE_BY_ID, catalog, effKg, gymOf, lastSetOf, type ForgeState, type FSet } from './forgeCore';
+import { L, BASE_BY_ID, TAIL_NAMES, catalog, dropJoined, effKg, gymOf, lastSetOf, type ForgeState, type FSet } from './forgeCore';
 import { pickerFor, nearest, stepFrom, type Care, type ForgeExercise, type Pattern } from './forgeCatalog';
 import { e1rmOf, bestE1rm } from './forgeTrain';
 import { weeklySets, WEEKLY_MIN } from './forgeStrength';
+import { recoverySummary } from './forgeRecovery';
 
 export type RoutineGoal = 'fuerza' | 'hipertrofia' | 'salud';
 export interface RoutineItem {
@@ -403,6 +404,7 @@ export function planFromRoutine(s: ForgeState, r: Routine, day?: RoutineDay, opt
     plan[it.exId] = t.sets;
     targets[it.exId] = t;
   }
+  dropJoined(s, plan, targets);
   return { plan, targets, day: d };
 }
 
@@ -571,7 +573,8 @@ export function routineToday(s: ForgeState, now: Date = L.forgeNow()): RoutineTo
   const order = r.days.map((_, k) => r.days[(i0 + k) % r.days.length].id);
   const textOf = (d: RoutineDay | undefined, t: Target) => {
     const it = d?.items.find((i) => i.exId === t.exId);
-    return targetText(s, { ...t, measure: it?.measure, perSide: it?.perSide, amrap: it?.amrap });
+    const remate = s.tailPlan?.[t.exId];
+    return `${targetText(s, { ...t, measure: it?.measure, perSide: it?.perSide, amrap: it?.amrap })}${remate ? ` + remate: ${TAIL_NAMES[remate.kind].many}` : ''}`;
   };
   const rest = (): RoutineToday => ({ day: tk, rest: true, dayId: null, name: null, doneSets, items: [], order });
   const pd = s.planDay;
@@ -587,7 +590,7 @@ export function routineToday(s: ForgeState, now: Date = L.forgeNow()): RoutineTo
 }
 
 /** Lo que el servidor necesita para armar o ajustar la rutina por chat (lo manda el teléfono en sync_forge_projection). */
-export function routineContext(s: ForgeState): { gym: ForgeState['gym']; e1rm: Record<string, number>; experience: 'principiante' | 'intermedio'; routine: Routine | null; today: RoutineToday | null } {
+export function routineContext(s: ForgeState): { gym: ForgeState['gym']; e1rm: Record<string, number>; experience: 'principiante' | 'intermedio'; routine: Routine | null; today: RoutineToday | null; recent: DiaResumen[]; recovery: ReturnType<typeof recoverySummary> | null } {
   const e1rm: Record<string, number> = {};
   for (const id of new Set(Object.values(s.sessions || {}).flatMap((d) => Object.keys(d)))) {
     const v = bestE1rm(s, id);
@@ -595,7 +598,62 @@ export function routineContext(s: ForgeState): { gym: ForgeState['gym']; e1rm: R
   }
   let today: RoutineToday | null = null;
   try { today = routineToday(s); } catch {}
-  return { gym: s.gym, e1rm, experience: experienceOf(s), routine: s.routinePlan ?? null, today };
+  let recent: DiaResumen[] = [];
+  try { recent = diasRecientes(s); } catch {}
+  let recovery: ReturnType<typeof recoverySummary> | null = null;
+  try { recovery = recoverySummary(s); } catch {}
+  return { gym: s.gym, e1rm, experience: experienceOf(s), routine: s.routinePlan ?? null, today, recent, recovery };
+}
+
+// ─── Lo que entrenaste cada día, para el chat (2026-11-05) ──────────────────────────────────────────────────────────
+// Chat real: «puedo mirar mi rutina de ayer» → Eris dijo que la app no guardaba lo de ayer (el servidor solo tenía el
+// progreso), y «50 kilos de esta huea que se empuja» no supo que era el press de pecho en máquina (110 lb).
+
+export interface DiaResumen {
+  day: string; label: string;
+  /** cada ejercicio: «3 series: 12, 12, 11 reps · 110 lb (~50 kg)»; `kg` = la carga más alta en kilos (null sin carga) */
+  items: Array<{ name: string; group: string; text: string; kg: number | null }>;
+}
+
+const LB = 0.45359237;
+const kgTxt = (x: number) => String(Math.round(x * 10) / 10).replace('.', ',');
+
+/** El resumen de un día entrenado (null si no hay series de trabajo) */
+export function resumenDia(s: ForgeState, day: string): DiaResumen | null {
+  const ej = ejerciciosDelDia(s, day);
+  if (!ej.length) return null;
+  const cat = catalog(s);
+  const items = ej.map(({ exId, work }) => {
+    const ex = cat[exId];
+    const asist = ex.eq === 'asist';
+    const cargas = work.map((x) => (asist ? x.assist : x.kg)).filter((c): c is number => typeof c === 'number' && c > 0);
+    const lb = work.some((x) => x.unit === 'lb');
+    const top = cargas.length ? Math.max(...cargas) : null;
+    const reps = work.filter((x) => x.reps > 0).map((x) => (x.tail ? `${x.reps}+${x.tail.reps}` : String(x.reps)));
+    const seg = ex.unit === 'seg' ? ' s' : ex.unit === 'min' ? ' min' : '';
+    const remate = work.find((x) => x.tail)?.tail;
+    const repsTxt = reps.length ? `${reps.join(', ')}${seg || ' reps'}${remate ? ` (la 2.ª cifra: ${TAIL_NAMES[remate.kind].many}, sin descanso)` : ''}` : '';
+    const cargaTxt = top == null ? (ex.eq === 'bw' ? 'con tu peso' : '')
+      : asist ? `asistida −${kgTxt(top)} ${lb ? 'lb' : 'kg'}`
+        : lb ? `${kgTxt(top)} lb (~${kgTxt(top * LB)} kg)`
+          : ex.eq === 'db' ? `${kgTxt(top)} kg cada mancuerna` : ex.eq === 'bw' ? `con tu peso + ${kgTxt(top)} kg` : `${kgTxt(top)} kg`;
+    const text = [`${work.length} ${work.length === 1 ? 'serie' : 'series'}${repsTxt ? `: ${repsTxt}` : ''}`, cargaTxt].filter(Boolean).join(' · ');
+    return { name: ex.name, group: ex.group, text, kg: top == null || asist ? null : Math.round((lb ? top * LB : top) * 10) / 10 };
+  });
+  return { day, label: diaTexto(day), items };
+}
+
+/** Los últimos días entrenados (hoy incluido), del más reciente al más antiguo */
+export function diasRecientes(s: ForgeState, n = 14): DiaResumen[] {
+  const out: DiaResumen[] = [];
+  const tk = L.todayKey();
+  for (const day of Object.keys(s.sessions || {}).sort().reverse()) {
+    if (day > tk) continue;
+    const d = resumenDia(s, day);
+    if (d) out.push(d);
+    if (out.length >= n) break;
+  }
+  return out;
 }
 
 // ─── Repetir un día (pedido del usuario, 2026-11-04) ─────────────────────────────────────────────────────────────────
@@ -675,6 +733,7 @@ export function repeatDay(s: ForgeState, day: string, modo: 'reemplazar' | 'suma
       ...(carga != null ? { kg: carga } : {}), ...(conEsa.some((x) => x.unit === 'lb') ? { unit: 'lb' as const } : {}), why,
     };
   }
+  dropJoined(s, plan, targets);
   const name = modo === 'sumar' && pd ? `${pd.name} + ${diaTexto(day)}` : `Repite el ${diaTexto(day)}`;
   return { ...s, plan, planDay: { day: tk, id: '', name, targets, repetido: day } };
 }

@@ -12,6 +12,11 @@ import { Btn, Chip, H, Label, P, Panel, Row, Sheet } from '../ui';
 import { useForgeState, useForgeAct } from '../useForge';
 import { useForgeUi } from '../forgeUi';
 import * as Str from '../../../services/forge/forgeStrength';
+import * as T from '../../../services/forge/forgeTrain';
+import { restTimer, fmtClock } from '../../../services/forge/restTimer';
+import * as Rc from '../../../services/forge/forgeRecovery';
+
+const listaNombres = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} y ${xs[xs.length - 1]}` : xs[0] ?? 'tus músculos');
 import * as Pr from '../../../services/forge/forgeProgress';
 import * as R from '../../../services/forge/forgeRoutine';
 import SetLogger, { EQ_NAME, setText, type LoggerTarget } from '../SetLogger';
@@ -63,6 +68,10 @@ export default function Entrenar() {
   // «Repetir un día» (pedido del usuario, 2026-11-04): los ejercicios de ese día pasan al plan de hoy
   const [repetir, setRepetir] = useState(false);
   const [eligiendo, setEligiendo] = useState<string | null>(null);
+  const [descansos, setDescansos] = useState(false);
+  // Dos líneas del plan que en verdad son una serie (pronas + negativas): se ofrece juntarlas una vez
+  const juntar = useMemo(() => (editingPast ? null : C.joinOffer(S)), [S.plan, S.tailPlan, S.tailDismissed, editingPast]);
+  const misDescansos = useMemo(() => (descansos ? T.restStats(S) : null), [descansos]);
   const dias = useMemo(() => R.trainedDays(S, 14), [S.sessions, S.customExercises]);
   const esteDia = editingPast ? R.diaEntrenado(S, day) ?? undefined : undefined;
   const hayPlanHoy = Object.keys(plan).length > 0;
@@ -77,13 +86,18 @@ export default function Entrenar() {
   // Con un plan ya armado hoy, se pregunta si se reemplaza o se suma; si no, se carga directo
   const elegirDia = (dia: string) => { if (hayPlanHoy) { setRepetir(false); setEligiendo(dia); } else void aplicarRepetir(dia, 'reemplazar'); };
 
+  // ¿Cómo vienen los músculos? (entre 12 y 96 h después de entrenar, una vez al día: forgeRecovery)
+  const agujetas = useMemo(() => (S ? Rc.sorenessPrompt(S) : null), [S]);
+
   const repeatLast = async (exId: string) => {
     const last = C.lastSetOf(S, exId);
     if (!last) { setLogger({ exId, day }); return; }
-    const { at: _a, legacy: _l, warmup: _w, ...rest } = last;
+    const { at: _a, legacy: _l, warmup: _w, ...sinHora } = last;
+    const rest = T.withMeasuredRest(S, day, cat[exId], sinHora); // se anota al terminar: el descanso de antes se mide
     let tree: Str.AutoSkillResult | null = null;
     const record = Pr.setRecord(S, exId, rest, day);
     const next = await act((s) => { tree = Str.applyAutoSkills(C.logSet(s, day, exId, rest)); return tree.state; }, 'serie');
+    if (next) restTimer.afterSet(next, day, cat[exId], rest);
     ui.toast(next ? C.setXpGain(S, next) : 0, (tree ? Str.autoSkillToast(tree) : null) ?? record ?? `${cat[exId].name} +1 serie 💪`);
   };
 
@@ -110,6 +124,12 @@ export default function Entrenar() {
               <P size={12} color={routineDay.targets[id].deload ? FG.orange : FG.gold}>Objetivo: {R.targetText(S, routineDay.targets[id])} · {routineDay.targets[id].why}</P>
             ) : null}
             {routineDay?.targets?.[id]?.note ? <P size={11.5} color={FG.dim}>{routineDay.targets[id].note}</P> : null}
+            {S.tailPlan?.[id] ? (
+              <TouchableOpacity onPress={() => act((s) => C.splitTail(s, id), 'plan')} accessibilityLabel="Separar el remate en otra línea">
+                <P size={12} color={FG.gold}>Con remate: {C.TAIL_NAMES[S.tailPlan[id].kind].many.toLowerCase()} · <Text style={{ color: FG.dim }}>separar</Text></P>
+              </TouchableOpacity>
+            ) : null}
+            {T.tailLine(S, id) ? <P size={11.5} color={FG.muted}>{T.tailLine(S, id)}</P> : null}
           </View>
           {tgt != null && (
             <TouchableOpacity onPress={() => act((s) => C.togglePlan(s, id), 'plan')} style={st.iconBtn} accessibilityLabel="Quitar del plan"><Icon name="X" size={13} color={FG.dim} /></TouchableOpacity>
@@ -136,7 +156,9 @@ export default function Entrenar() {
           )}
           <View style={{ flex: 1 }} />
           {sets.length > 0 && <Btn title="Repetir" kind="ghost" small icon="RotateCcw" onPress={() => repeatLast(id)} />}
-          <Btn title="Serie" small icon="Plus" kind="green" onPress={() => setLogger({ exId: id, day })} />
+          {(ex.unit === 'seg' || ex.unit === 'min') && !editingPast
+            ? <><Btn title="Serie" small icon="Plus" kind="ghost" onPress={() => setLogger({ exId: id, day })} /><Btn title="Cronometrar" small icon="Timer" kind="green" onPress={() => setLogger({ exId: id, day, crono: true })} /></>
+            : <Btn title="Serie" small icon="Plus" kind="green" onPress={() => setLogger({ exId: id, day })} />}
         </Row>
       </View>
     );
@@ -157,6 +179,18 @@ export default function Entrenar() {
         </Panel>
       )}
 
+      {!editingPast && agujetas && (
+        <Panel tint={FG.gold}>
+          <P size={13.5} color={FG.white} bold>¿Cómo vienen {listaNombres(agujetas.nombres)}?</P>
+          <P size={12}>Entrenaste hace {agujetas.hoursAgo} h. Con tu respuesta aprendo cómo te recuperas tú.</P>
+          <Row gap={6} style={{ marginTop: 8, flexWrap: 'wrap' }}>
+            {([['nada', 'Sin molestia'], ['molesta', 'Agujetas'], ['limita', 'Me limita']] as const).map(([nivel, t]) => (
+              <Btn key={nivel} title={t} small kind="ghost" onPress={() => { void act((x) => Rc.recordSoreness(x, nivel, agujetas.subs, agujetas.day), 'agujetas'); ui.toast(0, 'ANOTADO'); }} />
+            ))}
+          </Row>
+        </Panel>
+      )}
+
       <Row style={{ marginBottom: 10 }}>
         <View style={{ flex: 1 }}>
           <H size={26}>{editingPast ? 'PLAN DE ESE DÍA' : 'PLAN DE HOY'}</H>
@@ -167,9 +201,22 @@ export default function Entrenar() {
       </Row>
       {editingPast ? (
         esteDia ? <Btn title="Repetir este entreno hoy" kind="gold" small icon="RotateCcw" onPress={() => elegirDia(day)} style={{ alignSelf: 'flex-start', marginBottom: 10 }} /> : null
-      ) : dias.length > 0 ? (
-        <Btn title="Repetir un día" kind="ghost" small icon="RotateCcw" onPress={() => setRepetir(true)} style={{ alignSelf: 'flex-start', marginBottom: 10 }} />
-      ) : null}
+      ) : (
+        <Row gap={6} style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+          {dias.length > 0 && <Btn title="Repetir un día" kind="ghost" small icon="RotateCcw" onPress={() => setRepetir(true)} />}
+          <Btn title="Descansos" kind="ghost" small icon="Timer" onPress={() => setDescansos(true)} />
+        </Row>
+      )}
+      {juntar && (
+        <Panel tint={FG.gold}>
+          <P size={13.5} color={FG.white} bold>¿{cat[juntar.main].name} y sus negativas van seguidas?</P>
+          <P size={12}>Si las haces sin descanso son una sola serie: anotas una vez y el descanso parte al final.</P>
+          <Row gap={6} style={{ marginTop: 8, flexWrap: 'wrap' }}>
+            <Btn title="Juntarlas" small kind="gold" onPress={() => { void act((s) => C.joinAsTail(s, juntar.main, juntar.tail), 'plan'); ui.toast(0, 'JUNTAS EN UNA SERIE ✓'); }} />
+            <Btn title="Ahora no" small kind="ghost" onPress={() => act((s) => C.dismissJoin(s, juntar.main), 'plan')} />
+          </Row>
+        </Panel>
+      )}
 
       {!editingPast && ui.ready && ui.ready.level !== 'normal' && !(totalTarget && totalDone >= totalTarget) && (
         <View style={[st.hint, { borderColor: (ui.ready.level === 'liviano' ? FG.orange : FG.gold) + '55' }]}>
@@ -201,6 +248,12 @@ export default function Entrenar() {
               <React.Fragment key={id}>
                 {block && block !== prev ? <Label size={10} color={FG.gold} style={{ marginTop: k ? 6 : 0 }}>{String(block).toUpperCase()}</Label> : null}
                 <Row1 id={id} />
+                {k < planIds.length - 1 && !editingPast && (
+                  <TouchableOpacity onPress={() => act((s) => C.toggleLink(s, id, planIds[k + 1]), 'plan')} style={st.link} accessibilityRole="button" accessibilityLabel={S.planLinks?.[id] === planIds[k + 1] ? 'Separar estos dos ejercicios' : 'Unir con el siguiente ejercicio, sin descanso'}>
+                    <Icon name="Link" size={12} color={S.planLinks?.[id] === planIds[k + 1] ? FG.gold : FG.dimmer} />
+                    <P size={11.5} color={S.planLinks?.[id] === planIds[k + 1] ? FG.gold : FG.dimmer}>{S.planLinks?.[id] === planIds[k + 1] ? 'Unidos: sin descanso entre ellos' : 'Unir con el siguiente'}</P>
+                  </TouchableOpacity>
+                )}
               </React.Fragment>
             );
           })}
@@ -259,6 +312,24 @@ export default function Entrenar() {
       </Panel>
 
       <SetLogger target={logger} onClose={() => setLogger(null)} />
+      <Sheet visible={descansos} onClose={() => setDescansos(false)} title="DESCANSOS">
+        <Label size={11} style={{ marginBottom: 6 }}>ENTRE EJERCICIOS</Label>
+        <Row gap={6} style={{ flexWrap: 'wrap', marginBottom: 6 }}>
+          {[2, 3, 4, 5, 7].map((m) => <Chip key={m} label={`${m} min`} color={FG.gold} on={S.restPrefs?.[T.BETWEEN_KEY] === m * 60} onPress={() => act((s) => T.setRestPref(s, T.BETWEEN_KEY, m * 60), 'descanso')} />)}
+        </Row>
+        <P size={12} color={FG.dim} style={{ marginBottom: 12 }}>La barra parte con esto cuando terminas un ejercicio. Entre series, cada ejercicio recuerda lo que le dejas con −15 y +15.</P>
+        {misDescansos && (misDescansos.sets.n >= 3 || misDescansos.between.n >= 3) ? (
+          <View style={{ marginBottom: 12 }}>
+            <Label size={11} style={{ marginBottom: 4 }}>LO QUE HAS TOMADO</Label>
+            {misDescansos.sets.n >= 3 && <P size={13} color={FG.text}>Entre series: {fmtClock(misDescansos.sets.med)}</P>}
+            {misDescansos.between.n >= 3 && <P size={13} color={FG.text}>Entre ejercicios: {fmtClock(misDescansos.between.med)}</P>}
+            <P size={12} color={FG.dim} style={{ marginTop: 2 }}>Es lo típico tuyo. Sale de la hora en que anotas, así que incluye lo que tardas en preparar el siguiente.</P>
+          </View>
+        ) : null}
+        <Label size={11} style={{ marginBottom: 4 }}>QUÉ SE SABE</Label>
+        <P size={12.5} style={{ marginBottom: 6 }}>Entre series: más de 1 minuto ayuda un poco al músculo y, pasado 1:30, los estudios no ven más crecimiento. Pero cerca del fallo, descansar 3 a 5 minutos te deja hacer más repeticiones.</P>
+        <P size={12.5}>Entre ejercicios: no encontré estudios que lo midan directo. Lo más cercano dice que pesa más si el siguiente usa los mismos músculos, y que lo que va primero rinde más.</P>
+      </Sheet>
       <Sheet visible={repetir || !!eligiendo} onClose={() => { setRepetir(false); setEligiendo(null); }} title={eligiendo ? '¿Y TU PLAN DE HOY?' : 'REPETIR UN DÍA'}>
         {eligiendo ? (
           <View style={{ gap: 10 }}>
@@ -350,6 +421,7 @@ function ExerciseCreator({ visible, onClose }: { visible: boolean; onClose: () =
 const st = StyleSheet.create({
   diaRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel },
   exCard: { borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel, borderRadius: 14, padding: 12 },
+  link: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'center', paddingVertical: 2, paddingHorizontal: 8, marginVertical: -4, minHeight: 28 },
   iconBtn: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: FG.line2, alignItems: 'center', justifyContent: 'center' },
   sets: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   setChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel2, borderRadius: 10, paddingVertical: 5, paddingHorizontal: 8 },

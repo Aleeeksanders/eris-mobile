@@ -14,6 +14,9 @@ import { useForgeState, useForgeAct } from './useForge';
 import { useForgeUi } from './forgeUi';
 import * as Str from '../../services/forge/forgeStrength';
 import * as Pr from '../../services/forge/forgeProgress';
+import * as T from '../../services/forge/forgeTrain';
+import { restTimer } from '../../services/forge/restTimer';
+import TimedRun, { TIMED_MIN_SECS } from './TimedRun';
 
 export const EQ_NAME: Record<string, string> = {
   bw: 'Peso corporal', asist: 'Máquina asistida', banda: 'Banda', db: 'Mancuernas', bb: 'Barra', ez: 'Barra Z', smith: 'Smith',
@@ -31,17 +34,25 @@ const RIRS: Array<{ v: number | null; label: string; hint: string }> = [
 /** «3 × 10 · 7 kg · RIR 2» de una serie */
 export function setText(ex: any, set: C.FSet): string {
   const unit = ex?.unit === 'seg' ? ' s' : ex?.unit === 'min' ? ' min' : '';
-  const parts = [`${set.reps}${unit || ' reps'}`];
+  const parts = [`${set.reps}${unit || (set.reps === 1 ? ' rep' : ' reps')}`];
   if (ex?.eq === 'asist' && set.assist) parts.push(`asist. ${fmtLoad(set.assist)} ${set.unit ?? 'kg'}`);
   else if (ex?.eq === 'banda' && set.band) parts.push(`banda ${(BANDS.find((b) => b.id === set.band)?.name ?? '').toLowerCase()}`);
   else if (ex?.eq === 'bw' && set.kg) parts.push(`+${fmtLoad(set.kg)} kg`);
   else if (set.kg) parts.push(`${fmtLoad(set.kg)} ${set.unit ?? 'kg'}`);
   if (set.rir != null) parts.push(set.rir === 0 ? 'al fallo' : `RIR ${set.rir === 3 ? '3+' : set.rir}`);
   if (set.warmup) parts.push('calent.');
-  return parts.join(' · ');
+  return `${parts.join(' · ')}${set.tail ? ` + ${C.tailText(set.tail)}` : ''}`;
 }
 
-export interface LoggerTarget { exId: string; day: string; editIdx?: number }
+const TAIL_KINDS: C.TailKind[] = ['neg', 'ayuda', 'peso', 'pausa'];
+const TAIL_HINT: Record<C.TailKind, string> = {
+  neg: 'Bajas lento, 3 a 5 segundos. Cuando ya no controles la bajada, se acabó.',
+  ayuda: 'Sigues con una banda o con ayuda hasta que tampoco salga.',
+  peso: 'Bajas el peso, sin descanso, y sigues hasta que tampoco salga.',
+  pausa: 'Respiras unos 20 segundos y sacas las que salgan.',
+};
+
+export interface LoggerTarget { exId: string; day: string; editIdx?: number; /** abrir directo el cronómetro (ejercicio por tiempo) */ crono?: boolean }
 
 export default function SetLogger({ target, onClose }: { target: LoggerTarget | null; onClose: () => void }) {
   const S = useForgeState();
@@ -57,6 +68,12 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
   const [band, setBand] = useState('m');
   const [rir, setRir] = useState<number | null>(2);
   const [warmup, setWarmup] = useState(false);
+  const [crono, setCrono] = useState(false);
+  // El remate: lo que sigues haciendo sin descanso al no salir más
+  const [tailKind, setTailKind] = useState<C.TailKind | null>(null);
+  const [tailReps, setTailReps] = useState(3);
+  const [tailLoad, setTailLoad] = useState(0);
+  const [tailBand, setTailBand] = useState('m');
 
   const picker = useMemo(() => (ex && gym ? pickerFor(ex, gym) : null), [ex, gym]);
 
@@ -66,7 +83,9 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
     // Lo que toca según la rutina (con la progresión) si hoy todavía no hay series de este ejercicio
     const t = !editing && S.planDay?.day === target.day && !(S.sessions[target.day]?.[ex.id]?.length) ? S.planDay?.targets?.[ex.id] : null;
     const fromTarget: C.FSet | null = t ? { reps: t.repMin, rir: t.rir, ...(t.kg != null ? (ex.eq === 'asist' ? { assist: t.kg } : { kg: t.kg }) : {}), ...(t.unit === 'lb' ? { unit: 'lb' as const } : {}) } : null;
-    const base: C.FSet | null = editing ?? fromTarget ?? C.lastSetOf(S, ex.id) ?? null;
+    // La primera serie de hoy parte de la PRIMERA de la última vez (la última suele ser la más cansada: «1 rep» tras 5 y 3)
+    const hoy = (S.sessions[target.day]?.[ex.id] || []).filter((x) => !x.warmup);
+    const base: C.FSet | null = editing ?? fromTarget ?? (hoy.length ? C.lastSetOf(S, ex.id) : T.firstSetLastTime(S, ex.id, target.day)) ?? null;
     setReps(base?.reps ?? (S.reps || {})[ex.id] ?? ex.reps);
     // Si la máquina cambió de unidad (kg ↔ lb), lo anterior se convierte: 56 kg son ~123 lb, no 56 lb
     const conv = (v: number | undefined) => {
@@ -81,7 +100,17 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
     setBand(base?.band ?? 'm');
     setRir(editing ? editing.rir ?? null : base?.rir ?? 2);
     setWarmup(!!editing?.warmup);
-  }, [target?.exId, target?.day, target?.editIdx, picker]);
+    setCrono(!!target.crono);
+    // Corrigiendo: lo que tenía. Nueva: lo de la serie anterior; si no, lo que dejaste planeado para este ejercicio
+    const tail = editing ? editing.tail : base?.tail;
+    const kindInicial = tail?.kind ?? (editing ? null : S.tailPlan?.[ex.id]?.kind ?? null);
+    setTailKind(kindInicial);
+    if (kindInicial && !editing) setRir(0); // se remata porque ya no salía otra
+    // Sin remate anotado: lo de esa ronda la última vez, también si las negativas iban en otra línea
+    setTailReps(tail?.reps ?? (T.tailHistory(S, ex.id, 1).slice(-1)[0]?.rounds[hoy.length]?.tail || 3));
+    setTailLoad(tail?.kg ?? (picker.values.length ? nearest(picker.values, (conv(base?.kg) ?? 0) * 0.8) : 0));
+    setTailBand(tail?.band ?? 'm');
+  }, [target?.exId, target?.day, target?.editIdx, target?.crono, picker]);
 
   if (!S || !ex || !target || !picker || !gym) return <Sheet visible={false} onClose={onClose}><View /></Sheet>;
 
@@ -90,8 +119,22 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
   const machine = (ex.machine ?? (ex.eq === 'asist' ? 'asistida' : undefined)) as MachineId | undefined;
   const needsMachineCheck = !!machine && (ex.eq === 'maq' || ex.eq === 'polea' || ex.eq === 'asist') && !gym.checked?.[machine];
 
+  const conRemate = ex.eq !== 'cardio' && !ex.unit && !warmup;
+  const tailOpts = TAIL_KINDS.filter((k) => (k === 'peso' ? picker.kind === 'kg' && picker.values.length > 1 : k === 'ayuda' ? ['bw', 'asist', 'banda'].includes(ex.eq) : true));
+  const tailActivo = conRemate && tailKind && tailOpts.includes(tailKind) ? tailKind : null;
+  const tail: C.SetTail | undefined = tailActivo ? {
+    kind: tailActivo, reps: tailReps,
+    ...(tailActivo === 'peso' ? { kg: tailLoad, ...(picker.unit === 'lb' ? { unit: 'lb' as const } : {}) } : {}),
+    ...(tailActivo === 'ayuda' ? { band: tailBand, assist: BANDS.find((b) => b.id === tailBand)?.kg ?? 0 } : {}),
+  } : undefined;
+  const elegirRemate = (k: C.TailKind | null) => {
+    setTailKind(k);
+    if (k) setRir(0); // se remata porque ya no salía otra: si no fue así, se cambia arriba
+  };
+
   const draft: C.FSet = {
     reps,
+    tail,
     ...(picker.kind === 'kg' && load ? { kg: load } : {}),
     ...(picker.kind === 'lastre' && load ? { kg: load } : {}),
     ...(picker.kind === 'assist' ? { assist: load } : {}),
@@ -103,20 +146,31 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
   const eff = C.effKg(S, ex, draft);
   const lastTime = C.lastSetOf(S, ex.id, target.day);
 
-  const save = async () => {
+  const save = async (set: C.FSet = draft) => {
     if (editing && target.editIdx != null) {
-      await act((s) => C.updateSet(s, target.day, ex.id, target.editIdx!, draft), 'serie corregida');
+      await act((s) => C.updateSet(s, target.day, ex.id, target.editIdx!, set), 'serie corregida');
       ui.toast(0, 'SERIE CORREGIDA ✓');
     } else {
+      // Se anota al terminar la serie: el descanso de antes se mide y el que viene parte acá
+      const conDescanso = T.withMeasuredRest(S, target.day, ex, set);
       // La serie y lo que cumple del árbol (pasos medibles: «8 dominadas estrictas», «Plancha 45 s»…)
       let tree: Str.AutoSkillResult | null = null;
-      const record = Pr.setRecord(S, ex.id, draft, target.day); // contra todo lo anterior (antes de anotarla)
-      const next = await act((s) => { tree = Str.applyAutoSkills(C.logSet(s, target.day, ex.id, draft)); return tree.state; }, 'serie');
+      const record = Pr.setRecord(S, ex.id, conDescanso, target.day); // contra todo lo anterior (antes de anotarla)
+      const next = await act((s) => { tree = Str.applyAutoSkills(C.logSet(s, target.day, ex.id, conDescanso)); return tree.state; }, 'serie');
       const treeMsg = tree ? Str.autoSkillToast(tree) : null;
       ui.toast(warmup || !next ? 0 : C.setXpGain(S, next), treeMsg ?? record ?? (warmup ? `${ex.name} · calentamiento` : `${ex.name} +1 serie 💪`));
+      if (next) restTimer.afterSet(next, target.day, ex, conDescanso);
     }
     onClose();
   };
+  // El cronómetro: al terminar, los segundos quedan anotados con lo demás de esta serie (el peso, el esfuerzo)
+  const timed = ex.unit === 'seg' || ex.unit === 'min';
+  const cronoListo = (secs: number) => {
+    setCrono(false);
+    if (secs < TIMED_MIN_SECS) { ui.toast(0, 'MUY CORTO: NO LO ANOTÉ'); if (target.crono) onClose(); return; }
+    void save({ ...draft, reps: ex.unit === 'min' ? Math.max(1, Math.round(secs / 60)) : secs });
+  };
+  const cronoFuera = () => { setCrono(false); if (target.crono) onClose(); };
   const remove = async () => {
     if (target.editIdx == null) return;
     await act((s) => C.removeSet(s, target.day, ex.id, target.editIdx!), 'serie borrada');
@@ -129,7 +183,7 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
       footer={(
         <Row style={{ marginTop: 10 }}>
           {editing ? <Btn title="Borrar" kind="danger" icon="Trash2" onPress={remove} style={{ flex: 1 }} /> : null}
-          <Btn title={editing ? 'Guardar cambios' : 'Guardar serie'} onPress={save} style={{ flex: 2 }} />
+          <Btn title={editing ? 'Guardar cambios' : 'Guardar serie'} onPress={() => save()} style={{ flex: 2 }} />
         </Row>
       )}>
       <P size={12.5} style={{ marginBottom: 10 }}>
@@ -137,6 +191,9 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
       </P>
 
       {needsMachineCheck && machine && <MachineCheck machine={machine} />}
+
+      {timed && !editing && <Btn title="Cronometrar" icon="Timer" kind="green" onPress={() => setCrono(true)} style={{ marginBottom: 10 }} />}
+      <TimedRun visible={crono} title={ex.name} goal={T.timedGoal(S, target.day, ex)} onStop={cronoListo} onCancel={cronoFuera} />
 
       <View style={st.block}>
         <Stepper label={unitLabel} size="lg" value={String(reps)} onMinus={() => setReps((r) => Math.max(1, r - repStep))} onPlus={() => setReps((r) => Math.min(ex.unit === 'min' ? 300 : 999, r + repStep))} />
@@ -169,6 +226,29 @@ export default function SetLogger({ target, onClose }: { target: LoggerTarget | 
             {RIRS.map((r) => <Chip key={String(r.v)} label={r.label} on={rir === r.v} color={r.v === 0 ? FG.red : r.v == null ? FG.dim : FG.gold} onPress={() => setRir(r.v)} />)}
           </Row>
           <P size={12} color={FG.dim} style={{ marginTop: 6 }}>{rir == null ? 'Sin dato: no cuenta para estimar tu fuerza.' : RIRS.find((x) => x.v === rir)?.hint}. Sirve para calcular tu fuerza y lo que gastaste.</P>
+        </View>
+      )}
+
+      {conRemate && (
+        <View style={st.block}>
+          <Label size={11} style={{ marginBottom: 6 }}>¿SEGUISTE SIN DESCANSO? (REMATE)</Label>
+          <Row gap={6} style={{ flexWrap: 'wrap' }}>
+            <Chip label="No" on={!tailActivo} onPress={() => elegirRemate(null)} />
+            {tailOpts.map((k) => <Chip key={k} label={C.TAIL_NAMES[k].label} on={tailActivo === k} color={FG.gold} onPress={() => elegirRemate(k)} />)}
+          </Row>
+          {tailActivo && (
+            <View style={{ marginTop: 10 }}>
+              <Stepper label={`${C.TAIL_NAMES[tailActivo].label.toUpperCase()} · REPS`} value={String(tailReps)} onMinus={() => setTailReps((r) => Math.max(1, r - 1))} onPlus={() => setTailReps((r) => Math.min(99, r + 1))} />
+              {tailActivo === 'peso' && <View style={{ marginTop: 10 }}><WeightPicker values={picker.values} value={tailLoad} unit={picker.unit} onChange={setTailLoad} /></View>}
+              {tailActivo === 'ayuda' && (
+                <Row gap={6} style={{ flexWrap: 'wrap', marginTop: 10 }}>
+                  {BANDS.map((b) => <Chip key={b.id} label={`${b.name} (~${b.kg} kg)`} on={tailBand === b.id} onPress={() => setTailBand(b.id)} />)}
+                </Row>
+              )}
+              <P size={12.5} color={FG.gold} style={{ marginTop: 8 }}>{reps} {reps === 1 ? 'estricta' : 'estrictas'} + {tailReps} = {reps + tailReps} en total</P>
+              <P size={12} color={FG.dim} style={{ marginTop: 2 }}>{TAIL_HINT[tailActivo]} Va todo en esta serie: un solo descanso.</P>
+            </View>
+          )}
         </View>
       )}
 

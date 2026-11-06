@@ -16,7 +16,7 @@
 //   20+ el mismo día. Los pasos de técnica (parkour, acrobacia, progresiones) siguen a mano. Desmarcar uno lo respeta.
 // ============================================================
 
-import { L, catalog, effKg, isStrict, type ForgeState, type FSet } from './forgeCore';
+import { L, catalog, effKg, isStrict, setValue, type ForgeState, type FSet } from './forgeCore';
 import type { StdLift, SubId } from './forgeCatalog';
 import { e1rmOf } from './forgeTrain';
 import { skillById, isMasteredAny } from './forgeSkillsExt';
@@ -213,7 +213,7 @@ export function weeklySets(s: ForgeState, days = 7, until?: string): Record<stri
     for (const [exId, sets] of Object.entries(exs)) {
       const ex = cat[exId];
       if (!ex) continue;
-      const n = sets.filter((x) => !x.warmup).length;
+      const n = sets.reduce((a, x) => a + setValue(x), 0); // una serie con remate vale 1,5
       if (!n) continue;
       for (const [sub, pts] of Object.entries(ex.m || {})) out[sub] = (out[sub] || 0) + n * ((pts as number) >= 2 ? 1 : 0.5);
     }
@@ -225,40 +225,6 @@ export function weeklySets(s: ForgeState, days = 7, until?: string): Record<stri
 export type VolumeState = 'nada' | 'bajo' | 'optimo' | 'alto';
 export function volumeState(sets: number): VolumeState {
   return sets <= 0 ? 'nada' : sets < WEEKLY_MIN ? 'bajo' : sets <= WEEKLY_MAX ? 'optimo' : 'alto';
-}
-
-export interface Recovery {
-  /** el último día con trabajo para ese músculo (AAAA-MM-DD) */
-  lastDay: string | null;
-  daysAgo: number | null;
-  /** series ese día (principal = 1, secundario = ½) */
-  sets: number;
-  state: 'listo' | 'recuperando' | 'sin_datos';
-  /** días que faltan para volver a cargarlo fuerte */
-  readyInDays: number;
-}
-
-/**
- * La recuperación de un músculo (fase I8): el último día que se trabajó y cuánto falta. ACSM: ~48 h entre sesiones que
- * cargan el mismo grupo; con poco volumen (menos de 4 series) basta un día.
- */
-export function muscleRecovery(s: ForgeState, sub: SubId | string, now: Date = L.forgeNow()): Recovery {
-  const cat = catalog(s);
-  const today = keyOf(now);
-  for (const day of Object.keys(s.sessions || {}).sort().reverse()) {
-    if (day > today) continue;
-    let n = 0;
-    for (const [exId, list] of Object.entries(s.sessions[day] || {})) {
-      const pts = ((cat[exId]?.m ?? {}) as Record<string, number>)[sub] ?? 0;
-      if (pts >= 1) n += list.filter((x) => !x.warmup).length * (pts >= 2 ? 1 : 0.5);
-    }
-    if (n < 1) continue;
-    const daysAgo = Math.round((new Date(`${today}T12:00:00`).getTime() - new Date(`${day}T12:00:00`).getTime()) / 86_400_000);
-    const sets = Math.round(n * 2) / 2;
-    const readyInDays = Math.max(0, (sets >= 4 ? 2 : 1) - daysAgo);
-    return { lastDay: day, daysAgo, sets, state: readyInDays > 0 ? 'recuperando' : 'listo', readyInDays };
-  }
-  return { lastDay: null, daysAgo: null, sets: 0, state: 'sin_datos', readyInDays: 0 };
 }
 
 /** Los ejercicios que más trabajan un subgrupo (los que ya usas primero). */
@@ -339,6 +305,8 @@ function metOn(s: ForgeState, c: Crit): string | null {
   const cat = catalog(s);
   const days = Object.keys(s.sessions || {}).sort();
   for (const day of days) {
+    // «5 negativas»: también cuentan las del remate de una dominada
+    if (c.kind === 'reps' && c.ex.includes('dom_negativa') && Object.entries(s.sessions[day] || {}).some(([id, list]) => cat[id]?.pattern === 'tir_v' && list.some((x) => !x.warmup && x.tail?.kind === 'neg' && x.tail.reps >= c.min))) return day;
     for (const id of c.ex) {
       const ex = cat[id];
       const sets = ((s.sessions[day] || {})[id] || []).filter((x) => !x.warmup && (!('strict' in c) || !c.strict || !ex || isStrict(ex, x)));

@@ -20,6 +20,7 @@ import Arena from './tabs/Arena';
 import Progreso from './tabs/Progreso';
 import Rutina from './tabs/Rutina';
 import SkillSheet from './SkillSheet';
+import RestBar, { useRestState } from './RestBar';
 import { ForgeUiCtx, type ForgeUi, type Tab } from './forgeUi';
 import type { Readiness } from '../../services/sleep/sleepCore';
 
@@ -39,6 +40,7 @@ export default function ForgeShell({ onExit, exitLabel, active = true, ready = n
   const fontsOk = useForgeFonts();
   const S = useForgeState();
   const insets = useSafeAreaInsets();
+  const rest = useRestState();
   const [tab, setTab] = useState<Tab>('hoy');
   const [viewDay, setViewDay] = useState<string | null>(null);
   const [skill, setSkill] = useState<string | null>(null);
@@ -102,7 +104,7 @@ export default function ForgeShell({ onExit, exitLabel, active = true, ready = n
             <TouchableOpacity style={st.exitBtn} onPress={onExit} activeOpacity={0.75}><Text style={st.exitText}>← {exitLabel ?? 'Eris'}</Text></TouchableOpacity>
           </View>
         )}
-        <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: tab === 'arbol' ? 0 : 16, paddingTop: 6, paddingBottom: 96 }} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: tab === 'arbol' ? 0 : 16, paddingTop: 6, paddingBottom: rest ? 164 : 96 }} keyboardShouldPersistTaps="handled">
           {/* Cabecera: el RPG de siempre */}
           <View style={{ paddingHorizontal: tab === 'arbol' ? 16 : 0 }}>
             <Row style={{ justifyContent: 'space-between', marginBottom: 12 }}>
@@ -146,7 +148,9 @@ export default function ForgeShell({ onExit, exitLabel, active = true, ready = n
           {tab === 'rutina' && <Rutina />}
         </ScrollView>
 
-        {/* Pestañas */}
+        {/* El descanso entre series y las pestañas */}
+        <View style={st.bottom}>
+        <RestBar />
         <View style={[st.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
           {TABS.map((t) => {
             const on = tab === t.id;
@@ -157,6 +161,7 @@ export default function ForgeShell({ onExit, exitLabel, active = true, ready = n
               </TouchableOpacity>
             );
           })}
+        </View>
         </View>
 
         {/* +XP */}
@@ -244,7 +249,8 @@ const st = StyleSheet.create({
   streak: { alignItems: 'center', backgroundColor: FG.panel, borderWidth: 1, borderColor: FG.line, borderRadius: 14, paddingVertical: 6, paddingHorizontal: 14 },
   rankCard: { backgroundColor: FG.panel, borderWidth: 1, borderColor: FG.line, borderRadius: 16, padding: 16, marginBottom: 14 },
   levelRing: { width: 78, height: 78, borderRadius: 39, borderWidth: 2, borderColor: FG.red, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1d1620' },
-  tabBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', backgroundColor: '#0f0d12', borderTopWidth: 1, borderTopColor: FG.line, paddingTop: 8 },
+  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  tabBar: { flexDirection: 'row', backgroundColor: '#0f0d12', borderTopWidth: 1, borderTopColor: FG.line, paddingTop: 8 },
   tabBtn: { flex: 1, alignItems: 'center', gap: 3 },
   tabText: { fontFamily: FONT.bodyBold, fontSize: 9.5, letterSpacing: 0.5 },
   toast: { position: 'absolute', top: 120, alignSelf: 'center', alignItems: 'center', backgroundColor: 'rgba(21,19,26,0.97)', borderWidth: 1, borderColor: FG.gold + '55', borderRadius: 16, paddingVertical: 10, paddingHorizontal: 20 },
