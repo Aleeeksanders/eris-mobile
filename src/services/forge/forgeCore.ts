@@ -149,6 +149,8 @@ export interface ForgeState {
   tailDismissed?: string[];
   /** ejercicios unidos, sin descanso entre ellos: A → B */
   planLinks?: Record<string, string>;
+  /** series antiguas por las que ya se preguntó si fueron con ayuda («día:ejercicio») */
+  assistChecked?: string[];
   /** lo que dijiste de tus músculos después de entrenar (forgeRecovery): las últimas 120 respuestas */
   soreness?: Array<{ at: number; level: 'nada' | 'molesta' | 'limita'; subs: string[]; day: string }>;
   /** lo que llega del teléfono y del servidor */
@@ -618,6 +620,46 @@ export function splitTail(s: ForgeState, main: string): ForgeState {
 
 /** «Ahora no» a juntarlos: no se vuelve a ofrecer para ese ejercicio. */
 export const dismissJoin = (s: ForgeState, main: string): ForgeState => ({ ...s, tailDismissed: [...(s.tailDismissed || []).filter((x) => x !== main), main] });
+
+// ─── Series antiguas que en verdad fueron con ayuda ───
+// Lo migrado del HTML guardaba solo las repeticiones: la ayuda de la máquina se perdió y esas series quedaron como estrictas,
+// con récords y pasos del árbol que no eran (el fundador, 2026-11-06: «10, 10, 6» con 18 kg de ayuda; su máximo real era 6).
+
+const claveAyuda = (day: string, exId: string) => `${day}:${exId}`;
+
+/** La primera serie antigua sospechosa: de peso corporal, sin carga, y 2 reps o más por sobre tu mejor marca anotada después. */
+export function assistOffer(s: ForgeState): { day: string; exId: string; toId: string; reps: number[]; best: number } | null {
+  const cat = catalog(s);
+  const dias = Object.keys(s.sessions || {}).sort();
+  for (const day of dias) {
+    for (const [exId, sets] of Object.entries(s.sessions[day] || {})) {
+      const ex = cat[exId];
+      if (ex?.eq !== 'bw' || (s.assistChecked || []).includes(claveAyuda(day, exId))) continue;
+      const toId = (ex.alt || []).find((id) => cat[id]?.eq === 'asist');
+      const viejas = workSets(sets).filter((x) => x.legacy && !x.kg && !x.assist);
+      if (!toId || !viejas.length) continue;
+      let best = 0;
+      for (const d of dias) for (const x of workSets(s.sessions[d][exId])) if (!x.legacy && x.reps > best) best = x.reps;
+      if (best && Math.max(...viejas.map((x) => x.reps)) >= best + 2) return { day, exId, toId, reps: viejas.map((x) => x.reps), best };
+    }
+  }
+  return null;
+}
+
+/** «Sí, fueron con ayuda»: esas series pasan al ejercicio asistido, con su ayuda. El XP de entonces no cambia. */
+export function markAssisted(s: ForgeState, day: string, exId: string, toId: string, assist: number): ForgeState {
+  const dia = (s.sessions || {})[day];
+  if (!dia?.[exId]) return s;
+  const esVieja = (x: FSet) => !x.warmup && !!x.legacy && !x.kg && !x.assist;
+  const movidas = dia[exId].filter(esVieja).map((x) => ({ ...x, assist }));
+  const quedan = dia[exId].filter((x) => !esVieja(x));
+  const nuevo: Record<string, FSet[]> = { ...dia, [toId]: [...(dia[toId] || []), ...movidas] };
+  if (quedan.length) nuevo[exId] = quedan; else delete nuevo[exId];
+  return syncLegacyDay({ ...s, sessions: { ...s.sessions, [day]: nuevo }, assistChecked: [...(s.assistChecked || []), claveAyuda(day, exId)] }, day);
+}
+
+/** «No, fueron sin ayuda»: no se vuelve a preguntar por ese día. */
+export const dismissAssist = (s: ForgeState, day: string, exId: string): ForgeState => ({ ...s, assistChecked: [...(s.assistChecked || []), claveAyuda(day, exId)] });
 
 /** Une A con B (sin descanso entre ellos), o los separa si ya estaban unidos. */
 export function toggleLink(s: ForgeState, a: string, b: string): ForgeState {

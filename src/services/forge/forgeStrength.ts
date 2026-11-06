@@ -352,6 +352,23 @@ export function applyAutoSkills(s: ForgeState): AutoSkillResult {
   return { state: checked.length ? { ...s, skills } : s, checked, mastered };
 }
 
+/**
+ * Tras corregir series antiguas: los pasos que marcó el código y que ya no se cumplen vuelven a quedar pendientes. Solo los que
+ * marcó el código (`auto`), nunca los marcados a mano. Se pueden volver a ganar: no quedan en `off`.
+ */
+export function revokeAutoSkills(s: ForgeState): ForgeState {
+  let skills = s.skills || {};
+  for (const [skId, cur0] of Object.entries(skills)) {
+    const cur = cur0 as any;
+    const auto: number[] = cur?.auto ?? [];
+    if (!auto.length || !ALL_CRITERIA[skId]) continue;
+    const perdidos = auto.filter((idx) => ALL_CRITERIA[skId][idx] && !metOn({ ...s, skills } as ForgeState, ALL_CRITERIA[skId][idx]));
+    if (!perdidos.length) continue;
+    skills = { ...skills, [skId]: { ...cur, steps: (cur.steps as boolean[]).map((v, i) => (perdidos.includes(i) ? false : v)), auto: auto.filter((i) => !perdidos.includes(i)) } };
+  }
+  return skills === s.skills ? s : { ...s, skills };
+}
+
 /** Desmarcar a mano un paso que se marcó solo: queda desmarcado (no se vuelve a marcar). */
 export function toggleStepManual(s: ForgeState, skId: string, idx: number): ForgeState {
   const sk = skillById(skId);

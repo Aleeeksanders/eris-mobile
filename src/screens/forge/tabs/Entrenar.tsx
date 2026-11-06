@@ -8,7 +8,7 @@ import * as C from '../../../services/forge/forgeCore';
 import type { ForgeExercise } from '../../../services/forge/forgeCatalog';
 import { FG, FONT, fmtDay, n0 } from '../theme';
 import { Icon } from '../icons';
-import { Btn, Chip, H, Label, P, Panel, Row, Sheet } from '../ui';
+import { Btn, Chip, H, Label, P, Panel, Row, Sheet, Stepper } from '../ui';
 import { useForgeState, useForgeAct } from '../useForge';
 import { useForgeUi } from '../forgeUi';
 import * as Str from '../../../services/forge/forgeStrength';
@@ -72,6 +72,9 @@ export default function Entrenar() {
   // Dos líneas del plan que en verdad son una serie (pronas + negativas): se ofrece juntarlas una vez
   const juntar = useMemo(() => (editingPast ? null : C.joinOffer(S)), [S.plan, S.tailPlan, S.tailDismissed, editingPast]);
   const misDescansos = useMemo(() => (descansos ? T.restStats(S) : null), [descansos]);
+  // Series antiguas que parecen con ayuda: lo migrado perdió ese dato y cuentan como estrictas
+  const ayuda = useMemo(() => (editingPast ? null : C.assistOffer(S)), [S.sessions, S.assistChecked, S.customExercises, editingPast]);
+  const [ayudaKg, setAyudaKg] = useState(15);
   const dias = useMemo(() => R.trainedDays(S, 14), [S.sessions, S.customExercises]);
   const esteDia = editingPast ? R.diaEntrenado(S, day) ?? undefined : undefined;
   const hayPlanHoy = Object.keys(plan).length > 0;
@@ -206,6 +209,19 @@ export default function Entrenar() {
           {dias.length > 0 && <Btn title="Repetir un día" kind="ghost" small icon="RotateCcw" onPress={() => setRepetir(true)} />}
           <Btn title="Descansos" kind="ghost" small icon="Timer" onPress={() => setDescansos(true)} />
         </Row>
+      )}
+      {ayuda && (
+        <Panel tint={FG.gold}>
+          <P size={13.5} color={FG.white} bold>¿Tus series del {R.diaTexto(ayuda.day)} fueron con ayuda?</P>
+          <P size={12}>{cat[ayuda.exId].name}: anotaste {ayuda.reps.join(', ')}, y tu mejor marca después es {ayuda.best}. Si fueron con ayuda, no deberían contar como estrictas ni como récord.</P>
+          <View style={{ alignSelf: 'flex-start', marginTop: 8 }}>
+            <Stepper size="sm" label="AYUDA (KG)" value={String(ayudaKg)} onMinus={() => setAyudaKg((k) => Math.max(1, k - 1))} onPlus={() => setAyudaKg((k) => Math.min(80, k + 1))} />
+          </View>
+          <Row gap={6} style={{ marginTop: 8, flexWrap: 'wrap' }}>
+            <Btn title={`Sí, con ${ayudaKg} kg`} small kind="gold" onPress={() => { void act((s) => Str.revokeAutoSkills(C.markAssisted(s, ayuda.day, ayuda.exId, ayuda.toId, ayudaKg)), 'series con ayuda'); ui.toast(0, `PASARON A ${cat[ayuda.toId].name.toUpperCase()} ✓`); }} />
+            <Btn title="No, sin ayuda" small kind="ghost" onPress={() => act((s) => C.dismissAssist(s, ayuda.day, ayuda.exId), 'series con ayuda')} />
+          </Row>
+        </Panel>
       )}
       {juntar && (
         <Panel tint={FG.gold}>
