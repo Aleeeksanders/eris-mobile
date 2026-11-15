@@ -5,6 +5,7 @@ import {
   Animated, Easing, Pressable, Modal,
   Vibration, Clipboard, Alert, AppState, DeviceEventEmitter,
 } from 'react-native';
+import { KeyboardLiftView } from '../components/KeyboardLift';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Polygon, Path, Line, Rect, Circle } from 'react-native-svg';
 import Markdown from 'react-native-markdown-display';
@@ -924,7 +925,7 @@ export default function ChatScreen({
 
       {/* Nuevo proyecto */}
       <Modal visible={newProjectModal} transparent animationType="fade" onRequestClose={() => setNewProjectModal(false)}>
-        <View style={s.sheetOverlay}>
+        <KeyboardLiftView style={s.sheetOverlay}>
           <View style={s.sheetCard}>
             <Text style={s.sheetTitle}>Nuevo proyecto</Text>
             <TextInput
@@ -960,7 +961,7 @@ export default function ChatScreen({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardLiftView>
       </Modal>
 
       {/* Menú de acciones — proyecto o chat */}
@@ -1008,7 +1009,7 @@ export default function ChatScreen({
 
       {/* Instrucciones fijas del proyecto */}
       <Modal visible={!!instructionsModal} transparent animationType="fade" onRequestClose={() => setInstructionsModal(null)}>
-        <View style={s.sheetOverlay}>
+        <KeyboardLiftView style={s.sheetOverlay}>
           <View style={s.sheetCard}>
             <Text style={s.sheetTitle} numberOfLines={1}>Instrucciones · {instructionsModal?.name}</Text>
             <Text style={s.instrHint}>
@@ -1040,12 +1041,12 @@ export default function ChatScreen({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardLiftView>
       </Modal>
 
       {/* Renombrar proyecto o chat */}
       <Modal visible={!!renameModal} transparent animationType="fade" onRequestClose={() => setRenameModal(null)}>
-        <View style={s.sheetOverlay}>
+        <KeyboardLiftView style={s.sheetOverlay}>
           <View style={s.sheetCard}>
             <Text style={s.sheetTitle}>Renombrar {renameModal?.kind === 'project' ? 'proyecto' : 'chat'}</Text>
             <TextInput
@@ -1066,7 +1067,7 @@ export default function ChatScreen({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardLiftView>
       </Modal>
 
       {/* Mover chat a otro proyecto */}

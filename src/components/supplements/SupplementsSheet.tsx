@@ -9,7 +9,8 @@
 // ============================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, StyleSheet, Switch, KeyboardAvoidingView, Platform, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, StyleSheet, Switch, Linking, Alert } from 'react-native';
+import { KeyboardLiftView } from '../KeyboardLift';
 import { T, R, S } from '../../config/design';
 import InfoTip from '../InfoTip';
 import { SUP, SUP_GLOW, fmtHora, useSupplements } from './SupplementsCard';
@@ -56,7 +57,7 @@ export default function SupplementsSheet({ mode, onClose }: { mode: SupMode | nu
   const title = vista.v === 'mios' ? 'Mis suplementos' : vista.v === 'fichas' ? 'Fichas de suplementos' : vista.v === 'ficha' ? (fichaPorId(vista.id)?.nombre ?? 'Ficha') : vista.supId ? 'Editar suplemento' : 'Agregar suplemento';
   return (
     <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
-      <KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardLiftView style={s.overlay}>
         <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} accessibilityLabel="Cerrar" />
         <View style={s.card}>
           <View style={s.grabber} />
@@ -85,7 +86,7 @@ export default function SupplementsSheet({ mode, onClose }: { mode: SupMode | nu
             {vista.v === 'form' && <Form supId={vista.supId} fichaId={vista.fichaId} onDone={() => setVista({ v: 'mios' })} onFicha={(id) => setVista({ v: 'ficha', id })} />}
           </ScrollView>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardLiftView>
     </Modal>
   );
 }

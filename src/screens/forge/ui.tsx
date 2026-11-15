@@ -3,6 +3,8 @@
 // ============================================================
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, Pressable, type ViewStyle, type TextStyle, type StyleProp } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardLiftView } from '../../components/KeyboardLift';
 import { FG, FONT } from './theme';
 import { Icon } from './icons';
 
@@ -76,18 +78,20 @@ export function Stepper({ label, value, onMinus, onPlus, size = 'md', color = FG
 
 /** Hoja desde abajo (o centrada) con su botón de cerrar */
 export function Sheet({ visible, onClose, title, children, center, footer }: { visible: boolean; onClose: () => void; title?: string; children: React.ReactNode; center?: boolean; footer?: React.ReactNode }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType={center ? 'fade' : 'slide'} onRequestClose={onClose} statusBarTranslucent>
-      <Pressable style={[s.overlay, center && { justifyContent: 'center', padding: 20 }]} onPress={onClose}>
-        <Pressable style={[s.sheet, center && s.sheetCenter]} onPress={() => {}}>
+      <KeyboardLiftView style={[s.overlay, center && { justifyContent: 'center', paddingHorizontal: 20 }]}>{(lift) => (<>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Cerrar" />
+        <Pressable style={[s.sheet, center ? s.sheetCenter : { paddingBottom: lift > 0 ? 18 : Math.max(26, insets.bottom + 12) }]} onPress={() => {}}>
           <View style={s.sheetHead}>
             {title ? <H size={24} style={{ flex: 1 }}>{title}</H> : <View style={{ flex: 1 }} />}
             <TouchableOpacity onPress={onClose} style={s.close} accessibilityLabel="Cerrar"><Icon name="X" size={18} color={FG.muted} /></TouchableOpacity>
           </View>
-          <ScrollView style={{ maxHeight: center ? 520 : 560 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+          <ScrollView style={{ maxHeight: center ? 520 : 560, flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
           {footer}
         </Pressable>
-      </Pressable>
+      </>)}</KeyboardLiftView>
     </Modal>
   );
 }
@@ -113,7 +117,7 @@ export const s = StyleSheet.create({
   chip: { paddingVertical: 7, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1 },
   step: { borderRadius: 9, borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.line, alignItems: 'center', justifyContent: 'center' },
   overlay: { flex: 1, backgroundColor: 'rgba(6,5,8,0.88)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: '#17131c', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: FG.line2, padding: 18, paddingBottom: 26 },
+  sheet: { backgroundColor: '#17131c', maxHeight: '100%', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: FG.line2, padding: 18, paddingBottom: 26 },
   sheetCenter: { borderRadius: 20, paddingBottom: 18 },
   sheetHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
   close: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: FG.line2, backgroundColor: FG.panel, alignItems: 'center', justifyContent: 'center' },

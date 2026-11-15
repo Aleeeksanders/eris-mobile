@@ -114,5 +114,10 @@ class ErisBubbleModule : Module() {
         view.invalidate()
       }
     }
+
+    /** Mide el teclado de la ventana del Modal donde vive (ver ImeWatcherView y src/components/KeyboardLift.tsx). */
+    View(ImeWatcherView::class) {
+      Events("onIme")
+    }
   }
 }

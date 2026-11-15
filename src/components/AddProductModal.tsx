@@ -4,7 +4,8 @@
  * la próxima vez. Las etiquetas chilenas traen dos columnas ("100 g" y "1 porción"): se puede copiar cualquiera.
  */
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Modal, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Modal, ScrollView, StyleSheet } from 'react-native';
+import { KeyboardLiftView } from './KeyboardLift';
 import { T, R } from '../config/design';
 import { foodSearchService, type FoodItem } from '../services/FoodSearchService';
 import { maxSodiumMg } from '../services/nutrientSanity';
@@ -87,7 +88,7 @@ export default function AddProductModal({ visible, code, suggestedName, suggeste
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={s.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardLiftView style={s.backdrop}>
         <View style={s.sheet}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 12 }}>
             <Text style={s.title}>Agregar producto</Text>
@@ -143,7 +144,7 @@ export default function AddProductModal({ visible, code, suggestedName, suggeste
             <TouchableOpacity style={s.btn} onPress={save}><Text style={s.btnText}>Guardar y usar</Text></TouchableOpacity>
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardLiftView>
     </Modal>
   );
 }

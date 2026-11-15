@@ -2,9 +2,10 @@
 // Finanzas 2.0 — piezas: paneles, KPI, curva, barra con fantasma, chips, botones y la hoja de formularios.
 // ============================================================
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, TextInput, KeyboardAvoidingView, Platform, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, TextInput, Pressable } from 'react-native';
 import Svg, { Path, Line, Defs, LinearGradient, Stop, Rect, Circle } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardLiftView } from '../../components/KeyboardLift';
 import { FX, clp, catOf, CAT_ORDER, TIPO_CUENTA } from './fx';
 import type { Ref } from '../../services/finance/financeCore';
 import InfoTip from '../../components/InfoTip';
@@ -114,18 +115,18 @@ export function Sheet({ visible, title, onClose, onSave, saveLabel = 'Guardar', 
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardLiftView style={st.sheetDim}>{(lift) => (<>
         <Pressable style={st.sheetBack} onPress={onClose} accessibilityLabel="Cerrar" />
-        <View style={[st.sheet, { paddingBottom: Math.max(16, insets.bottom + 10) }]}>
+        <View style={[st.sheet, { paddingBottom: lift > 0 ? 12 : Math.max(16, insets.bottom + 10) }]}>
           <View style={st.sheetHandle} />
           <View style={st.sheetHead}>
             <Text style={st.sheetTitle}>{title}</Text>
             <TouchableOpacity onPress={onClose} style={st.sheetClose} accessibilityLabel="Cerrar"><Text style={{ color: FX.muted, fontSize: 18 }}>✕</Text></TouchableOpacity>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 12, paddingBottom: 6 }}>{children}</ScrollView>
+          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 520, flexShrink: 1 }} contentContainerStyle={{ gap: 12, paddingBottom: 6 }}>{children}</ScrollView>
           {onSave && <Btn label={saveLabel} onPress={onSave} color={color} style={{ marginTop: 12 }} />}
         </View>
-      </KeyboardAvoidingView>
+      </>)}</KeyboardLiftView>
     </Modal>
   );
 }
@@ -192,8 +193,9 @@ export const st = StyleSheet.create({
   btn: { minHeight: 48, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
   btnSmall: { minHeight: 38, paddingHorizontal: 12, borderRadius: 10 },
   btnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  sheetBack: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)' },
-  sheet: { backgroundColor: '#0c0b18', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: FX.line, paddingHorizontal: 18, paddingTop: 8 },
+  sheetDim: { backgroundColor: 'rgba(0,0,0,0.65)' },
+  sheetBack: { flex: 1 },
+  sheet: { backgroundColor: '#0c0b18', maxHeight: '100%', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: FX.line, paddingHorizontal: 18, paddingTop: 8 },
   sheetHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: FX.dim, marginBottom: 8 },
   sheetHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   sheetTitle: { flex: 1, color: FX.text, fontSize: 16, fontWeight: '900', letterSpacing: 1 },

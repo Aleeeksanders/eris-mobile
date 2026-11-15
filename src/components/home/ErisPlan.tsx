@@ -11,6 +11,7 @@
 // ============================================================
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ActivityIndicator, DeviceEventEmitter, Pressable, ScrollView, Switch } from 'react-native';
+import { KeyboardLiftView } from '../KeyboardLift';
 import Svg, { Path, Rect, Line, Circle, Text as SvgText } from 'react-native-svg';
 import { T, R } from '../../config/design';
 import { dayPlanStore, nextStep, MODE_NAME, type DayPlan, type PlanMode, type PlanStep, type PlanPreview, type PlanModule, type Mente, type TipoDia } from '../../services/dayPlan/dayPlanStore';
@@ -105,7 +106,8 @@ export function PlanSheet({ visible, current, onClose, onChosen }: { visible: bo
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={st.overlay} onPress={onClose} accessibilityLabel="Cerrar" />
+      <KeyboardLiftView style={st.overlay}>
+      <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Cerrar" />
       <View style={st.sheet}>
         <ScrollView contentContainerStyle={{ gap: 10 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={st.grab} />
@@ -172,6 +174,7 @@ export function PlanSheet({ visible, current, onClose, onChosen }: { visible: bo
         <TouchableOpacity onPress={() => setManejo(true)} style={{ marginTop: 10 }} accessibilityRole="button"><Text style={st.link}>🤖 Así manejo tus cosas: qué hago sola y qué no →</Text></TouchableOpacity>
         </ScrollView>
       </View>
+      </KeyboardLiftView>
       <AsiManejoSheet visible={manejo} modulo="plata" onClose={() => setManejo(false)} />
     </Modal>
   );

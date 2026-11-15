@@ -5,6 +5,7 @@ import {
   StyleSheet, ActivityIndicator, Modal, Animated,
   KeyboardAvoidingView, Platform, AppState, DeviceEventEmitter, Alert,
 } from 'react-native';
+import { KeyboardLiftView } from '../components/KeyboardLift';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTrainingIntent } from '../services/forge/trainingIntent';
@@ -1390,7 +1391,7 @@ export default function NutritionScreen({ onDataLogged }: Props) {
 
       {/* ── Editor de comidas («Mis comidas»; la lógica y sus pruebas en services/mealSlots.ts) ── */}
       <Modal visible={showMealEditor} transparent animationType="slide" statusBarTranslucent onRequestClose={() => setShowMealEditor(false)}>
-        <KeyboardAvoidingView style={s.editorOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardLiftView style={s.editorOverlay}>
           <View style={s.editorCard}>
             <View style={s.editorHeader}>
               <Text style={s.editorTitle}>Mis comidas</Text>
@@ -1506,7 +1507,7 @@ export default function NutritionScreen({ onDataLogged }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardLiftView>
       </Modal>
 
       {/* Confirmación "¿es el mismo alimento?" — Eris detectó un candidato

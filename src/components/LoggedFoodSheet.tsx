@@ -10,7 +10,8 @@
 // ============================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, StyleSheet } from 'react-native';
+import { KeyboardLiftView } from './KeyboardLift';
 import { T, R, S } from '../config/design';
 import InfoTip from './InfoTip';
 import type { FoodItem, LoggedFood } from '../services/FoodSearchService';
@@ -149,7 +150,7 @@ export default function LoggedFoodSheet({ entry, slots, slotLabel, wakeHour, onC
   const a = d.allergens;
   return (
     <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
-      <KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardLiftView style={s.overlay}>
         <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} accessibilityLabel="Cerrar" />
         <View style={s.card}>
           <View style={s.grabber} />
@@ -356,7 +357,7 @@ export default function LoggedFoodSheet({ entry, slots, slotLabel, wakeHour, onC
             )}
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardLiftView>
     </Modal>
   );
 }
