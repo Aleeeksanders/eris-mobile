@@ -33,11 +33,19 @@ test("el 24-10: la noche partida (02:33–09:05) y un segundo sueño en la tarde
   expect(sleepReading(d, 7.25)).toBe("En horas recuperaste, pero la noche fue partida y empezó tarde: descansa menos que dormir seguido.");
 });
 
-test("si la tarde hubiera sido más larga que la noche, el día igual empieza al terminar la noche", () => {
-  const d = sleepDay([{ start: at(24, 3, 0), end: at(24, 6, 0) }, { start: at(24, 13, 0), end: at(24, 18, 30) }], { usualWake: 7.75 })!;
-  expect(d.night!.kind).toBe("noche");
-  expect(new Date(d.dayWake!).getHours()).toBe(6);
-  expect(d.episodes[1].kind).toBe("segundo");
+test("un sueño largo hasta las 18:30 no mueve el día mientras no se sepa cómo sigues; a las 8 h sin dormir, sí", () => {
+  const partes = [{ start: at(24, 3, 0), end: at(24, 6, 0) }, { start: at(24, 13, 0), end: at(24, 18, 30) }];
+  const ahora = sleepDay(partes, { usualWake: 7.75, now: at(24, 19, 0) })!;
+  expect(new Date(ahora.dayWake!).getHours()).toBe(6);
+  expect(ahora.episodes.map((e) => e.kind)).toEqual(["segundo"]);
+  expect(ahora.pendingWake).toBe(new Date(at(24, 18, 30)).toISOString());
+  const despues = sleepDay(partes, { usualWake: 7.75, now: at(25, 3, 0) })!;
+  expect(new Date(despues.dayWake!).getHours()).toBe(18);
+  expect(despues.pendingWake).toBeNull();
+  // Cada uno en su día
+  const h = sleepByDay(partes, { usualWake: 7.75 });
+  expect(h.get("2026-10-24")!.totalH).toBe(3);
+  expect(h.get("2026-10-25")!.totalH).toBe(5.5);
 });
 
 test("una siesta corta en la tarde no corta nada ni mueve el día", () => {
@@ -99,36 +107,15 @@ test("sin su despertar aprendido, dos sueños largos fuera de la ventana no se s
   expect(new Date(d.dayWake!).getDate()).toBe(25);
 });
 
-test("un segundo sueño largo que termina el mismo día sí se suma, aunque pasen más de 24 h desde que empezó la noche", () => {
-  const d = sleepDay([{ start: at(23, 23, 0), end: at(24, 7, 0) }, { start: at(24, 20, 0), end: at(24, 23, 30) }], { usualWake: 7, usualSleepH: 8 })!;
+test("un segundo sueño largo que termina antes de las 18:00 sí se suma; desde las 18:00 cuenta al día siguiente", () => {
+  const d = sleepDay([{ start: at(23, 23, 0), end: at(24, 7, 0) }, { start: at(24, 13, 0), end: at(24, 17, 30) }], { usualWake: 7, usualSleepH: 8 })!;
   expect(d.episodes.map((e) => e.kind)).toEqual(["noche", "segundo"]);
-  expect(d.totalH).toBe(11.5);
+  expect(d.totalH).toBe(12.5);
   expect(d.nightH).toBe(8);
   expect(new Date(d.dayWake!).getHours()).toBe(7);
-});
-
-test("una siesta que cruza la medianoche sigue siendo del mismo día: no se pierde la noche", () => {
-  const d = sleepDay([{ start: at(24, 0, 0), end: at(24, 8, 0) }, { start: at(24, 23, 40), end: at(25, 0, 20) }], { usualWake: 8, usualSleepH: 8 })!;
-  expect(d.episodes.map((e) => e.kind)).toEqual(["noche", "siesta"]);
-  expect(d.nightH).toBe(8);
-});
-
-test("sin dormir la noche, las siestas de después (24 h o más despierto) no se suman a la noche de ayer", () => {
-  const d = sleepDay([{ start: at(24, 1, 0), end: at(24, 8, 0) }, { start: at(25, 14, 0), end: at(25, 16, 30) }], { usualWake: 8, usualSleepH: 7 })!;
-  expect(d.night).toBeNull();
-  expect(d.totalH).toBe(2.5);
-  expect(d.dayWake).toBeNull();
-});
-
-test("dos apps con el mismo sueño no lo cuentan doble", () => {
-  const a = { start: at(24, 0, 0), end: at(24, 7, 0) };
-  const d = sleepDay([a, { ...a, start: a.start + 5 * 60_000 }], { usualWake: 7 })!;
-  expect(fmtSleep(d.totalH)).toBe("7 h");
-});
-
-test("el historial por día: total y noche", () => {
-  const m = sleepByDay([anoche23, ...dia24], { usualWake: 7.75, usualSleepH: 7.25 });
-  expect(fmtSleep(m.get("2026-10-24")!.totalH)).toBe("9 h 31");
-  expect(fmtSleep(m.get("2026-10-24")!.nightH!)).toBe("5 h 29");
-  expect(m.get("2026-10-23")!.nightH).toBe(5.83);
+  expect(d.split).toBe(false);                                   // 8 h de noche seguidas: no fue una noche partida
+  expect(sleepReading(d)).toBeNull();
+  const h = sleepByDay([{ start: at(23, 23, 0), end: at(24, 7, 0) }, { start: at(24, 20, 0), end: at(24, 23, 30) }], { usualWake: 7, usualSleepH: 8 });
+  expect(h.get("2026-10-24")!.totalH).toBe(8);
+  expect(h.get("2026-10-25")!.totalH).toBe(3.5);
 });

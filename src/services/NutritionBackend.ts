@@ -7,6 +7,7 @@
  * todavía NO está en el registro local del teléfono (lo que sí está, ya pasó a Health Connect).
  */
 
+import { addManualSleep, saveWakeDecision } from './sleep/sleepStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter } from 'react-native';
 import { wsManager } from './WebSocketManager';
@@ -78,6 +79,13 @@ class NutritionBackend {
         // "Dormí 7 horas" por chat (sleep_log): Métricas, Inicio y el puntaje lo usan si el reloj no midió esa noche
         case 'sleep_logged':
           this.applyManualSleep(d.hours, d.day).catch(() => {});
+          break;
+        // «Dormí de 17:30 a 23:50» por chat: el mismo tramo que anotar en la pantalla de Sueño (2026-11-07)
+        case 'sleep_tramo':
+          if (typeof d.start === 'number' && typeof d.end === 'number' && d.end > d.start) addManualSleep(d.start, d.end).catch(() => {});
+          break;
+        case 'sleep_wake_decision':
+          if (typeof d.end === 'string' && (d.choice === 'dormir' || d.choice === 'partir')) saveWakeDecision(d.end, d.choice).catch(() => {});
           break;
         // Metas fijadas por chat (set_nutritional_goals): llegan aparte, sin esperar a la próxima sincronización completa
         case 'nutrition_goals_updated':

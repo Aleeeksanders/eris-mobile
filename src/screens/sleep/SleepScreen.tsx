@@ -4,7 +4,7 @@
 // Pedido del usuario (24-10): «más así el bloque de sueño e igual de preciso» que Mi Fitness, pero con la calidad de Eris.
 //   - Día: lo que dice Eris (la palabra de la noche y UNA acción), las partes del día para elegir (la noche, un segundo
 //     sueño, siestas), el hipnograma, las etapas con su rango típico (estimadas por el reloj), lo de durante el sueño y
-//     «Corregir» (no estaba durmiendo / anotar a mano).
+//     «Corregir» (no estaba durmiendo). «Anotar sueño» va a la vista, con dos horas y sin fechas (SleepEntry, 2026-11-07).
 //   - Semana y Mes: horas por día, la regularidad (de dormirse a despertar) con su ventana habitual, deuda, tendencia,
 //     cronotipo, el plan de mejora (UNA meta por 2 semanas, medida con sus noches) y la hora para acostarse.
 //   - «Sin números» (medir sin obsesión): palabras y barras, sin horas, porcentajes ni puntajes.
@@ -18,11 +18,12 @@ import InfoTip from '../../components/InfoTip';
 import { daySchedule } from '../../services/daySchedule';
 import { readSleepSessions, readSleepVitals, sleepPatternsNow, type SleepVitals } from '../../services/MetricsService';
 import {
-  sleepDayOn, sleepInsights, sleepByDay, nightRecords, hypnogram, STAGE_RANGES, sleepSummaryText, sleepReading, sleepAction,
+  sleepDay, sleepDayOn, sleepKey, sleepInsights, sleepByDay, nightRecords, hypnogram, STAGE_RANGES, sleepSummaryText, sleepReading, sleepAction,
   insightsText, bedtimeText, suggestPlan, planProgress, planTitle, patternsText, fmtSleep, clock, hhmmOf, type SleepPatterns,
-  type RawSession, type SleepEpisode, type SleepDay, type SleepPlan, type HypnoStage,
+  type RawSession, type SleepEpisode, type SleepDay, type SleepPlan, type HypnoStage, type WakeDecisions,
 } from '../../services/sleep/sleepCore';
-import { excludeSleep, addManualSleep, clearSleepEdits, loadSleepEdits, loadSleepPlan, saveSleepPlan, loadNoNumbers, saveNoNumbers } from '../../services/sleep/sleepStore';
+import { SleepEntryForm, WakeQuestion } from './SleepEntry';
+import { excludeSleep, clearSleepEdits, loadSleepEdits, loadSleepPlan, saveSleepPlan, loadNoNumbers, saveNoNumbers } from '../../services/sleep/sleepStore';
 
 const C = {
   night: '#a78bfa', segundo: '#38bdf8', siesta: '#94a3b8',
@@ -55,16 +56,21 @@ export default function SleepScreen({ visible, onClose }: { visible: boolean; on
   const [noNums, setNoNums] = useState(false);
   const [plan, setPlan] = useState<SleepPlan | null>(null);
   const [hasEdits, setHasEdits] = useState(false);
+  const [decisions, setDecisions] = useState<WakeDecisions>({});
 
   const load = useCallback(async () => {
     try { setSessions(await readSleepSessions(31)); } catch { setSessions([]); }
     setPlan(await loadSleepPlan());
     const e = await loadSleepEdits();
     setHasEdits(e.excluded.length + e.manual.length > 0);
+    setDecisions(e.decisions ?? {});
   }, []);
   useEffect(() => { if (visible) { setDay(dayKey(new Date())); setPart('todo'); load(); loadNoNumbers().then(setNoNums); } }, [visible, load]);
 
-  const opts = useMemo(() => ({ usualWake: daySchedule.usualWake(), usualSleepH: daySchedule.sleepHours() }), [sessions]);
+  const opts = useMemo(() => ({ usualWake: daySchedule.usualWake(), usualSleepH: daySchedule.sleepHours(), now: Date.now(), decisions }), [sessions, decisions]);
+  // El día más reciente: el de hoy, o el de mañana si un sueño largo terminó recién, pasadas las 18:00 (cuenta al día siguiente)
+  const actual = useMemo(() => (sessions ? sleepDay(sessions.filter((s) => s.end > Date.now() - 36 * 3_600_000), opts) : null), [sessions, opts]);
+  const maxDay = actual && actual.day > dayKey(new Date()) ? actual.day : dayKey(new Date());
   const sd = useMemo(() => (sessions ? sleepDayOn(sessions, day, opts) : null), [sessions, day, opts]);
   const endOfDay = keyToDate(day).getTime() + 86_400_000;
   // Lo de ese día se calcula como si fuera ese día (sin lo que vino después); el plan y «Hoy», siempre con lo de ahora
@@ -75,6 +81,7 @@ export default function SleepScreen({ visible, onClose }: { visible: boolean; on
 
   const toggleNums = () => { const v = !noNums; setNoNums(v); saveNoNumbers(v); };
   const edited = async (fn: () => Promise<void>) => { await fn(); setPart('todo'); await load(); };
+  const anotado = async (r: { start: number; end: number }) => { setDay(sleepKey(r.end, (r.end - r.start) / 60_000)); setPart('todo'); await load(); };
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
@@ -98,8 +105,8 @@ export default function SleepScreen({ visible, onClose }: { visible: boolean; on
         <View style={st.dateRow}>
           <Pressable onPress={() => { setDay(addDays(day, view === 'mes' ? -30 : view === 'semana' ? -7 : -1)); setPart('todo'); }} hitSlop={10}><Text style={st.arrow}>‹</Text></Pressable>
           <Text style={st.dateText}>{view === 'dia' ? dayLabel(day) : `${dayLabel(addDays(day, view === 'mes' ? -29 : -6))} – ${dayLabel(day)}`}</Text>
-          <Pressable disabled={day >= dayKey(new Date())} onPress={() => { const n = addDays(day, view === 'mes' ? 30 : view === 'semana' ? 7 : 1); setDay(n > dayKey(new Date()) ? dayKey(new Date()) : n); setPart('todo'); }} hitSlop={10}>
-            <Text style={[st.arrow, day >= dayKey(new Date()) && { opacity: 0.25 }]}>›</Text>
+          <Pressable disabled={day >= maxDay} onPress={() => { const n = addDays(day, view === 'mes' ? 30 : view === 'semana' ? 7 : 1); setDay(n > maxDay ? maxDay : n); setPart('todo'); }} hitSlop={10}>
+            <Text style={[st.arrow, day >= maxDay && { opacity: 0.25 }]}>›</Text>
           </Pressable>
         </View>
 
@@ -108,7 +115,7 @@ export default function SleepScreen({ visible, onClose }: { visible: boolean; on
         ) : (
           <ScrollView contentContainerStyle={st.body}>
             {view === 'dia'
-              ? <DayView sd={sd} ins={ins} part={part} setPart={setPart} noNums={noNums} sessions={sessions} day={day} hasEdits={hasEdits} edited={edited} />
+              ? <DayView sd={sd} ins={ins} part={part} setPart={setPart} noNums={noNums} sessions={sessions} day={day} hasEdits={hasEdits} edited={edited} anotado={anotado} pendingWake={actual?.pendingWake ?? null} onAnswered={load} />
               : <RangeView days={view === 'mes' ? 30 : 7} endDay={day} sessions={sessions} opts={opts} ins={ins} insNow={insNow} nights={nights} noNums={noNums} plan={plan} setPlan={(p) => { setPlan(p); saveSleepPlan(p); }} />}
           </ScrollView>
         )}
@@ -119,13 +126,15 @@ export default function SleepScreen({ visible, onClose }: { visible: boolean; on
 
 // ─── Día ─────────────────────────────────────────────────────────────────────
 
-function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edited }: {
+function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edited, anotado, pendingWake, onAnswered }: {
   sd: SleepDay | null; ins: ReturnType<typeof sleepInsights> | null; part: number | 'todo'; setPart: (p: number | 'todo') => void; noNums: boolean;
   sessions: RawSession[]; day: string; hasEdits: boolean; edited: (fn: () => Promise<void>) => Promise<void>;
+  anotado: (r: { start: number; end: number }) => Promise<void>; pendingWake: string | null; onAnswered: () => void;
 }) {
   const { width } = useWindowDimensions();
   const [vitals, setVitals] = useState<SleepVitals | null>(null);
   const [adding, setAdding] = useState(false);
+  useEffect(() => { setAdding(false); }, [day]);
   const eps = sd?.episodes ?? [];
   const sel: SleepEpisode[] = part === 'todo' ? eps : eps[part] ? [eps[part]] : eps;
   const from = sel.length ? Date.parse(sel[0].start) : 0, to = sel.length ? Date.parse(sel[sel.length - 1].end) : 0;
@@ -133,14 +142,20 @@ function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edit
   const isToday = day === dayKey(new Date());
   const score = sd?.night ? ins?.score ?? null : null;
 
+  // Lo que va arriba de todo: la pregunta si hay una, y anotar a la vista
+  const pregunta = pendingWake ? <View style={[st.card, { borderColor: `${C.night}88` }]}><WakeQuestion endIso={pendingWake} onAnswered={onAnswered} /></View> : null;
+  const formulario = <SleepEntryForm targetDay={day} usualOnset={ins?.usualOnset} usualWake={daySchedule.usualWake()} need={ins?.need} onSaved={async (r) => { setAdding(false); await anotado(r); }} onCancel={sd && eps.length ? () => setAdding(false) : undefined} />;
+
   if (!sd || !eps.length) {
     return (
       <View style={{ gap: 14 }}>
+        {pregunta}
         <View style={st.card}>
           <Text style={st.big}>Sin sueño registrado</Text>
-          <Text style={st.muted}>Tu reloj no marcó sueño para este día. Si dormiste sin él, anótalo y lo cuento igual.</Text>
+          <Text style={st.muted}>Anótalo con dos horas: el día lo deduzco yo.</Text>
+          <View style={{ marginTop: 8 }}>{formulario}</View>
         </View>
-        <Corregir sel={[]} day={day} hasEdits={hasEdits} adding={adding} setAdding={setAdding} edited={edited} />
+        {hasEdits && <Corregir sel={[]} day={day} hasEdits={hasEdits} edited={edited} />}
       </View>
     );
   }
@@ -156,6 +171,7 @@ function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edit
 
   return (
     <View style={{ gap: 14 }}>
+      {pregunta}
       {/* Eris */}
       <View style={[st.card, { borderColor: score ? `${WORD_COLOR[score.word]}55` : C.line }]}>
         <View style={st.rowBetween}>
@@ -173,6 +189,9 @@ function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edit
           </View>
         )}
       </View>
+
+      {adding ? <View style={st.card}><Text style={st.h3}>Anotar sueño</Text>{formulario}</View>
+        : <Pressable onPress={() => setAdding(true)} style={st.addBtn} accessibilityRole="button"><Text style={st.addBtnTxt}>+ Anotar sueño</Text></Pressable>}
 
       {/* Las partes, para elegir (como Mi Fitness) */}
       {eps.length > 1 && (
@@ -234,7 +253,7 @@ function DayView({ sd, ins, part, setPart, noNums, sessions, day, hasEdits, edit
         </View>
       )}
 
-      <Corregir sel={sel} day={day} hasEdits={hasEdits} adding={adding} setAdding={setAdding} edited={edited} />
+      <Corregir sel={sel} day={day} hasEdits={hasEdits} edited={edited} />
     </View>
   );
 }
@@ -277,54 +296,24 @@ function Hypno({ sessions, from, to, width }: { sessions: RawSession[]; from: nu
   );
 }
 
-function Corregir({ sel, day, hasEdits, adding, setAdding, edited }: {
-  sel: SleepEpisode[]; day: string; hasEdits: boolean; adding: boolean; setAdding: (v: boolean) => void; edited: (fn: () => Promise<void>) => Promise<void>;
+function Corregir({ sel, day, hasEdits, edited }: {
+  sel: SleepEpisode[]; day: string; hasEdits: boolean; edited: (fn: () => Promise<void>) => Promise<void>;
 }) {
   const base = keyToDate(day).getTime();
-  const [start, setStart] = useState(base - 60 * 60_000);       // 23:00 del día anterior
-  const [end, setEnd] = useState(base + 7 * 60 * 60_000);       // 07:00
-  useEffect(() => { setStart(base - 60 * 60_000); setEnd(base + 7 * 60 * 60_000); }, [day]);
-  const valid = end > start && end - start <= 16 * 3_600_000;
+  if (sel.length !== 1 && !hasEdits) return null;
   return (
     <View style={st.card}>
       <Text style={st.h3}>Corregir</Text>
-      <Text style={st.small}>Si el reloj marcó sueño cuando no dormías (en el sillón, o quedó cargando) o dormiste sin él.</Text>
+      <Text style={st.small}>Si el reloj marcó sueño cuando no dormías (en el sillón, o quedó cargando), o anotaste algo mal.</Text>
       <View style={st.btnRow}>
         {sel.length === 1 && (
           <Pressable style={st.btn} onPress={() => edited(() => excludeSleep(Date.parse(sel[0].start), Date.parse(sel[0].end)))}>
             <Text style={st.btnText}>No estaba durmiendo</Text>
           </Pressable>
         )}
-        <Pressable style={st.btn} onPress={() => setAdding(!adding)}><Text style={st.btnText}>{adding ? 'Cancelar' : 'Anotar a mano'}</Text></Pressable>
         {hasEdits && (
           <Pressable style={st.btnGhost} onPress={() => edited(() => clearSleepEdits(base - 12 * 3_600_000, base + 24 * 3_600_000))}><Text style={st.btnGhostText}>Deshacer lo corregido</Text></Pressable>
         )}
-      </View>
-      {adding && (
-        <View style={{ gap: 10, marginTop: 6 }}>
-          <Stepper label="Me dormí" value={start} onChange={setStart} />
-          <Stepper label="Desperté" value={end} onChange={setEnd} />
-          <Pressable disabled={!valid} style={[st.btnPrimary, !valid && { opacity: 0.4 }]} onPress={() => edited(async () => { await addManualSleep(start, end); setAdding(false); })}>
-            <Text style={st.btnPrimaryText}>Guardar {valid ? fmtSleep((end - start) / 3_600_000) : ''}</Text>
-          </Pressable>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function Stepper({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  const d = new Date(value);
-  const step = (min: number) => onChange(value + min * 60_000);
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={st.text}>{label}</Text>
-      <View style={[st.stepper, { justifyContent: 'space-between' }]}>
-        <Pressable onPress={() => step(-60)} hitSlop={6}><Text style={st.stepBtn}>−1h</Text></Pressable>
-        <Pressable onPress={() => step(-15)} hitSlop={6}><Text style={st.stepBtn}>−15</Text></Pressable>
-        <Text style={st.stepVal}>{dayLabel(dayKey(d))} {clock(d.toISOString())}</Text>
-        <Pressable onPress={() => step(15)} hitSlop={6}><Text style={st.stepBtn}>+15</Text></Pressable>
-        <Pressable onPress={() => step(60)} hitSlop={6}><Text style={st.stepBtn}>+1h</Text></Pressable>
       </View>
     </View>
   );
@@ -551,7 +540,6 @@ const st = StyleSheet.create({
   btnGhostText: { color: T.textMuted, fontSize: 12, fontWeight: '700', textDecorationLine: 'underline' },
   btnPrimary: { backgroundColor: C.night, borderRadius: R.full, paddingVertical: 11, alignItems: 'center', marginTop: 4 },
   btnPrimaryText: { color: '#0b0a12', fontSize: 14, fontWeight: '900' },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stepBtn: { color: C.night, fontSize: 12, fontWeight: '800' },
-  stepVal: { color: T.text, fontSize: 13, fontWeight: '700', minWidth: 96, textAlign: 'center' },
+  addBtn: { borderWidth: 1, borderColor: `${C.night}66`, borderRadius: R.full, paddingVertical: 11, alignItems: 'center' },
+  addBtnTxt: { color: C.night, fontSize: 14, fontWeight: '800' },
 });

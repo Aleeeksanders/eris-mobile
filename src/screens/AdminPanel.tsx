@@ -25,7 +25,28 @@ interface Row {
   lastActivityAt?: string;
   disabled?: boolean;
   stats: { tools: number; approved: number; denied: number; blocked: number; logins: number };
+  /** Cómo cuenta en la beta (lo marcas tú): beta gratis, paga o equipo (no entra en las cifras). */
+  grupo?: Grupo;
 }
+type Grupo = 'beta' | 'pagado' | 'equipo';
+const GRUPOS: Array<{ id: Grupo; label: string }> = [{ id: 'beta', label: 'Beta' }, { id: 'pagado', label: 'Paga' }, { id: 'equipo', label: 'Equipo' }];
+
+/** El informe de la medición de la beta (servidor: services/BetaReport.ts). Solo conteos, con alias. */
+interface Ret { n: number; vuelven: number; pct: number | null }
+interface Informe {
+  hoy: string; personas: number; equipo: number; fuera: number; muestraChica: boolean;
+  cohortes: Array<{ semana: string; altas: number; activadas: number; d1: Ret; d7: Ret; d30: Ret; s2: Ret; s5: Ret }>;
+  total: { altas: number; activadas: number; d1: Ret; d7: Ret; d30: Ret; s2: Ret; s5: Ret };
+  diasPorSemana: { comida: number | null; agua: number | null; sueno: number | null; entreno: number | null; activos: number | null; personas: number };
+  primeraSemana: Record<string, number | null>;
+  chat: { mensajes: number; mensajesPorDia: number | null; mensajesPorDiaActivo: number | null; porModelo: number | null; voz: number | null; segundosModeloPorRespuesta: number | null; respuestaP50s: number | null; respuestaP90s: number | null };
+  pc: { dias: number; modeloSegundosDia: number | null; horaPunta: number | null; horaPuntaEs: number | null; esperaPromedioS: number | null; whisperSegundosDia: number | null; piperSegundosDia: number | null; personasActivasDia: number | null; personasPorPc: number | null };
+  pagan: { pagados: number; elegibles35: number; pagados35: number; conversion35: number | null };
+}
+const pctTxt = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 100)} %`);
+const numTxt = (x: number | null | undefined, u = '') => (x == null ? '—' : `${String(x).replace('.', ',')}${u}`);
+const retTxt = (r: Ret) => (r.n ? `${pctTxt(r.pct)}` : '—');
+const semanaTxt = (iso: string) => { const [, m, d] = iso.split('-'); return `${+d}/${+m}`; };
 interface Overview {
   profiles: Row[];
   integrity: { ok: boolean; entries: number; brokenAt?: number };
@@ -38,7 +59,7 @@ interface Entry {
   detail?: string; ok?: boolean; error?: string; ip?: string;
 }
 
-type Tab = 'users' | 'activity';
+type Tab = 'users' | 'beta' | 'activity';
 type Filter = 'all' | 'tools' | 'access' | 'admin';
 const FILTERS: Array<{ id: Filter; label: string }> = [
   { id: 'all', label: 'Todo' }, { id: 'tools', label: 'Acciones' }, { id: 'access', label: 'Accesos' }, { id: 'admin', label: 'Admin y alertas' },
@@ -85,6 +106,16 @@ function describe(e: Entry): { text: string; color: string } {
   return { text: e.event, color: T.textLight };
 }
 
+function Kpi({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <View style={s.kpi}>
+      <Text style={s.kpiValue}>{value}</Text>
+      <Text style={s.kpiLabel}>{label}</Text>
+      <Text style={s.kpiSub}>{sub}</Text>
+    </View>
+  );
+}
+
 export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onClose: () => void; selfId: string }) {
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<Tab>('users');
@@ -94,6 +125,7 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [showLegacy, setShowLegacy] = useState(false);
+  const [informe, setInforme] = useState<Informe | null>(null);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterRef = useRef<Filter>('all');
   filterRef.current = filter;
@@ -105,6 +137,7 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
     if (!visible) return;
     const unsub = wsManager.subscribeMessage((d) => {
       if (d.type === 'admin_overview') { setOv(d); setBusy(false); }
+      else if (d.type === 'admin_beta_report') { setInforme(d.informe ?? null); setBusy(false); }
       else if (d.type === 'admin_audit') { if (d.filter === filterRef.current) setEntries(d.entries); }
       else if (d.type === 'admin_result') {
         setBusy(false);
@@ -121,7 +154,9 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
   }, [visible, loadOverview, loadAudit]);
 
   const pickFilter = (f: Filter) => { setFilter(f); filterRef.current = f; setEntries(null); loadAudit(f); };
-  const refresh = () => { setBusy(true); loadOverview(); loadAudit(filterRef.current); };
+  const loadInforme = useCallback(() => wsManager.sendMessage({ type: 'admin_beta_report' }), []);
+  const refresh = () => { setBusy(true); loadOverview(); loadAudit(filterRef.current); if (tab === 'beta') loadInforme(); };
+  const pickTab = (t: Tab) => { setTab(t); if (t === 'beta') { setBusy(true); loadInforme(); } };
 
   const act = (msg: object, title: string, body: string, confirmLabel: string, destructive = false) => {
     Alert.alert(title, body, [
@@ -156,6 +191,24 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
         <Text style={s.meta}>
           Último ingreso {ago(p.lastLoginAt)}  ·  {p.activeSessions} {p.activeSessions === 1 ? 'sesión' : 'sesiones'}  ·  {size(p.sizeBytes)} de datos
         </Text>
+        {p.role !== 'ikaros' && (
+          <View style={s.grupoRow}>
+            <Text style={s.grupoLabel}>En la beta</Text>
+            {GRUPOS.map((g) => {
+              const on = (p.grupo ?? 'beta') === g.id;
+              return (
+                <TouchableOpacity key={g.id} style={[s.filter, on && s.filterOn, { minHeight: 32 }]} disabled={on}
+                  onPress={() => act({ type: 'admin_set_grupo', profileId: p.profileId, grupo: g.id },
+                    g.id === 'pagado' ? `${label} paga` : g.id === 'equipo' ? `${label} es del equipo` : `${label} en la beta gratis`,
+                    g.id === 'pagado' ? 'Cuenta como persona que paga desde hoy, para la conversión de la beta. No cobra nada: el cobro va aparte.'
+                      : g.id === 'equipo' ? 'No entra en las cifras de la beta (activación, retención, conversión). Su uso del PC sí se cuenta.'
+                        : 'Cuenta como una persona más de la beta, sin pagar.', 'Marcar')}>
+                  <Text style={[s.filterText, on && { color: T.accent }]}>{g.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
         {(p.stats.tools > 0 || p.stats.blocked > 0) && (
           <Text style={s.meta}>
             Últimos 7 días: {p.stats.tools} {p.stats.tools === 1 ? 'acción' : 'acciones'} sensibles
@@ -228,8 +281,8 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
         )}
 
         <View style={s.tabs}>
-          {([['users', `Usuarios${ov ? ` (${google.length})` : ''}`], ['activity', 'Actividad']] as Array<[Tab, string]>).map(([id, label]) => (
-            <TouchableOpacity key={id} style={[s.tab, tab === id && s.tabOn]} onPress={() => setTab(id)}>
+          {([['users', `Usuarios${ov ? ` (${google.length})` : ''}`], ['beta', 'Beta'], ['activity', 'Actividad']] as Array<[Tab, string]>).map(([id, label]) => (
+            <TouchableOpacity key={id} style={[s.tab, tab === id && s.tabOn]} onPress={() => pickTab(id)}>
               <Text style={[s.tabText, tab === id && { color: T.accent }]}>{label}</Text>
             </TouchableOpacity>
           ))}
@@ -319,6 +372,68 @@ export function AdminPanel({ visible, onClose, selfId }: { visible: boolean; onC
             </>
           )}
 
+          {tab === 'beta' && (
+            <>
+              {!informe && <ActivityIndicator color={T.accent} style={{ marginTop: 40 }} />}
+              {informe && (
+                <>
+                  <View style={s.card}>
+                    <Text style={s.name}>{informe.personas} {informe.personas === 1 ? 'persona' : 'personas'} en la beta</Text>
+                    <Text style={s.sub}>{informe.equipo} del equipo no cuentan · {informe.fuera} apagaron la medición</Text>
+                    {informe.muestraChica && <Text style={[s.meta, { color: T.gold }]}>Con menos de 20 personas, cada porcentaje cambia mucho con una persona más: míralos como señales, no como cifras.</Text>}
+                    <View style={s.kpis}>
+                      <Kpi label="Se activaron" value={pctTxt(informe.total.altas ? informe.total.activadas / informe.total.altas : null)} sub={`${informe.total.activadas} de ${informe.total.altas}`} />
+                      <Kpi label="Vuelven al día 7" value={retTxt(informe.total.d7)} sub={informe.total.d7.n ? `${informe.total.d7.vuelven} de ${informe.total.d7.n}` : 'nadie llega aún'} />
+                      <Kpi label="Vuelven al día 30" value={retTxt(informe.total.d30)} sub={informe.total.d30.n ? `${informe.total.d30.vuelven} de ${informe.total.d30.n}` : 'nadie llega aún'} />
+                      <Kpi label="Pagan (35 días)" value={pctTxt(informe.pagan.conversion35)} sub={`${informe.pagan.pagados} marcados`} />
+                    </View>
+                    <Text style={s.hint}>Activada: en sus primeras 48 horas anotó algo y usó la app al menos 3 veces.</Text>
+                  </View>
+
+                  {informe.cohortes.length > 0 && (
+                    <View style={s.card}>
+                      <Text style={s.legacyName}>Por semana de alta</Text>
+                      <View style={[s.tRow, s.tHead]}>
+                        {['Semana', 'Altas', 'Activ.', 'Día 1', 'Día 7', 'Día 30'].map((h) => <Text key={h} style={[s.tCell, s.tHeadText]}>{h}</Text>)}
+                      </View>
+                      {informe.cohortes.map((c) => (
+                        <View key={c.semana} style={s.tRow}>
+                          <Text style={s.tCell}>{semanaTxt(c.semana)}</Text>
+                          <Text style={s.tCell}>{c.altas}</Text>
+                          <Text style={s.tCell}>{c.activadas}</Text>
+                          <Text style={s.tCell}>{retTxt(c.d1)}</Text>
+                          <Text style={s.tCell}>{retTxt(c.d7)}</Text>
+                          <Text style={s.tCell}>{retTxt(c.d30)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  <View style={s.card}>
+                    <Text style={s.legacyName}>Qué hacen</Text>
+                    <Text style={s.meta}>Días por semana (mediana de {informe.diasPorSemana.personas}): abren la app {numTxt(informe.diasPorSemana.activos)} · anotan comida {numTxt(informe.diasPorSemana.comida)} · agua {numTxt(informe.diasPorSemana.agua)} · sueño {numTxt(informe.diasPorSemana.sueno)} · entreno {numTxt(informe.diasPorSemana.entreno)}</Text>
+                    <Text style={s.meta}>La primera semana usaron: chat {pctTxt(informe.primeraSemana.chat)} · voz {pctTxt(informe.primeraSemana.voz)} · comida {pctTxt(informe.primeraSemana.comida)} · agua {pctTxt(informe.primeraSemana.agua)} · sueño {pctTxt(informe.primeraSemana.sueno)} · entreno {pctTxt(informe.primeraSemana.entreno)} · Finanzas {pctTxt(informe.primeraSemana.finanzas)} · Inventario {pctTxt(informe.primeraSemana.inventario)} · plan de Eris {pctTxt(informe.primeraSemana.plan)}</Text>
+                  </View>
+
+                  <View style={s.card}>
+                    <Text style={s.legacyName}>El chat (4 semanas)</Text>
+                    <Text style={s.meta}>{informe.chat.mensajes} mensajes · {numTxt(informe.chat.mensajesPorDia)} por persona al día ({numTxt(informe.chat.mensajesPorDiaActivo)} los días que abren la app)</Text>
+                    <Text style={s.meta}>Por el modelo {pctTxt(informe.chat.porModelo)} (el resto lo responde el código) · por voz {pctTxt(informe.chat.voz)} · {numTxt(informe.chat.segundosModeloPorRespuesta, ' s')} de modelo por respuesta</Text>
+                    <Text style={s.meta}>Responde en {numTxt(informe.chat.respuestaP50s, ' s')} o menos la mitad de las veces, y en {numTxt(informe.chat.respuestaP90s, ' s')} o menos 9 de cada 10.</Text>
+                  </View>
+
+                  <View style={s.card}>
+                    <Text style={s.legacyName}>El PC (14 días, todos)</Text>
+                    <Text style={s.meta}>{numTxt(informe.pc.modeloSegundosDia, ' s')} de modelo al día · hora más cargada {informe.pc.horaPuntaEs != null ? `${informe.pc.horaPuntaEs}:00` : '—'} ({pctTxt(informe.pc.horaPunta)} del día) · espera en cola {numTxt(informe.pc.esperaPromedioS, ' s')}</Text>
+                    <Text style={s.meta}>Whisper {numTxt(informe.pc.whisperSegundosDia, ' s')} al día · Piper {numTxt(informe.pc.piperSegundosDia, ' s')} al día · {numTxt(informe.pc.personasActivasDia)} personas activas al día</Text>
+                    <Text style={[s.meta, { color: T.text }]}>Un PC aguantaría ~{numTxt(informe.pc.personasPorPc)} personas que usen Eris así (sin pasar de la mitad del PC en la hora punta).</Text>
+                  </View>
+                  <Text style={s.privacy}>Solo conteos con un alias por persona: cuántos días, cuántos mensajes, qué módulos y cuánto PC. Nunca lo que escriben, comen o gastan. Quien apaga «Ayudar a mejorar Eris» en su Perfil queda fuera y se borra lo contado.</Text>
+                </>
+              )}
+            </>
+          )}
+
           {tab === 'activity' && (
             <>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: S.sm }}>
@@ -391,6 +506,18 @@ const s = StyleSheet.create({
   actText: { color: T.text, fontSize: 13, fontWeight: '700' },
 
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.sm },
+  grupoRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: S.sm },
+  grupoLabel: { color: T.textMuted, fontSize: 12, fontWeight: '700', marginRight: 2 },
+  kpis: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: S.sm },
+  kpi: { flexBasis: '47%', flexGrow: 1, backgroundColor: T.bgElevated, borderRadius: R.md, borderWidth: 1, borderColor: T.border, padding: S.sm },
+  kpiValue: { color: T.text, fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  kpiLabel: { color: T.textLight, fontSize: 12, fontWeight: '700', marginTop: 2 },
+  kpiSub: { color: T.textMuted, fontSize: 11, marginTop: 1 },
+  hint: { color: T.textMuted, fontSize: 12, lineHeight: 17, marginTop: S.sm },
+  tRow: { flexDirection: 'row', paddingVertical: 7, borderTopWidth: 1, borderTopColor: T.border },
+  tHead: { borderTopWidth: 0, marginTop: 6 },
+  tCell: { flex: 1, color: T.text, fontSize: 12, fontVariant: ['tabular-nums'] },
+  tHeadText: { color: T.textMuted, fontWeight: '700' },
   legacyHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.md, paddingVertical: 10 },
   legacyTitle: { color: T.textLight, fontSize: 14, fontWeight: '700' },
   legacyChevron: { color: T.textMuted, fontSize: 20, fontWeight: '700', paddingHorizontal: 8 },

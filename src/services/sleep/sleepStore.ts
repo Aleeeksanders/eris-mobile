@@ -10,7 +10,7 @@
 // ============================================================
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter } from 'react-native';
-import type { SleepEdits, SleepPlan } from './sleepCore';
+import type { SleepEdits, SleepPlan, WakeDecision, WakeDecisions } from './sleepCore';
 
 export const SLEEP_EDITS_KEY = 'eris_sleep_edits_v1';
 export const SLEEP_PLAN_KEY = 'eris_sleep_plan_v1';
@@ -23,14 +23,17 @@ const ok = (x: any) => x && typeof x.start === 'number' && typeof x.end === 'num
 export async function loadSleepEdits(): Promise<SleepEdits> {
   try {
     const v = JSON.parse((await AsyncStorage.getItem(SLEEP_EDITS_KEY)) || 'null');
-    return { excluded: Array.isArray(v?.excluded) ? v.excluded.filter(ok) : [], manual: Array.isArray(v?.manual) ? v.manual.filter(ok) : [] };
+    const decisions: WakeDecisions = {};
+    for (const [k, d] of Object.entries(v?.decisions ?? {})) if (d === 'dormir' || d === 'partir') decisions[k] = d;
+    return { excluded: Array.isArray(v?.excluded) ? v.excluded.filter(ok) : [], manual: Array.isArray(v?.manual) ? v.manual.filter(ok) : [], decisions };
   } catch { return { ...EMPTY }; }
 }
 
 async function saveSleepEdits(e: SleepEdits): Promise<void> {
   // Solo 60 días hacia atrás: lo antiguo ya no se muestra
   const from = Date.now() - 60 * 86_400_000;
-  const keep = { excluded: e.excluded.filter((x) => x.end > from), manual: e.manual.filter((x) => x.end > from) };
+  const decisions = Object.fromEntries(Object.entries(e.decisions ?? {}).filter(([k]) => Date.parse(k) > from));
+  const keep = { excluded: e.excluded.filter((x) => x.end > from), manual: e.manual.filter((x) => x.end > from), decisions };
   await AsyncStorage.setItem(SLEEP_EDITS_KEY, JSON.stringify(keep));
   DeviceEventEmitter.emit(SLEEP_EDITS_EVENT);
 }
@@ -40,19 +43,27 @@ export async function excludeSleep(start: number, end: number): Promise<void> {
   const e = await loadSleepEdits();
   const manual = e.manual.filter((m) => !(m.start < end && m.end > start));
   const wasManual = manual.length !== e.manual.length;
-  await saveSleepEdits({ excluded: wasManual ? e.excluded : [...e.excluded, { start, end }], manual });
+  await saveSleepEdits({ ...e, excluded: wasManual ? e.excluded : [...e.excluded, { start, end }], manual });
 }
 
 /** «Anotar a mano»: un tramo que el reloj no registró */
 export async function addManualSleep(start: number, end: number): Promise<void> {
   const e = await loadSleepEdits();
+  if (e.manual.some((m) => m.start === start && m.end === end)) return; // el mismo tramo dos veces (la app y el chat)
   await saveSleepEdits({ ...e, manual: [...e.manual, { start, end }] });
+}
+
+/** Lo que respondiste a «¿Cómo sigues?» tras un sueño largo a hora rara */
+export async function saveWakeDecision(endIso: string, choice: WakeDecision): Promise<void> {
+  const e = await loadSleepEdits();
+  await saveSleepEdits({ ...e, decisions: { ...(e.decisions ?? {}), [endIso]: choice } });
 }
 
 /** Deshacer las correcciones de un día (las que tocan ese rango) */
 export async function clearSleepEdits(from: number, to: number): Promise<void> {
   const e = await loadSleepEdits();
-  await saveSleepEdits({ excluded: e.excluded.filter((x) => !(x.start < to && x.end > from)), manual: e.manual.filter((x) => !(x.start < to && x.end > from)) });
+  const decisions = Object.fromEntries(Object.entries(e.decisions ?? {}).filter(([k]) => { const t = Date.parse(k); return !(t > from && t <= to); }));
+  await saveSleepEdits({ excluded: e.excluded.filter((x) => !(x.start < to && x.end > from)), manual: e.manual.filter((x) => !(x.start < to && x.end > from)), decisions });
 }
 
 export async function loadSleepPlan(): Promise<SleepPlan | null> {

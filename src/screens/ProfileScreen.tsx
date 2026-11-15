@@ -234,6 +234,8 @@ export default function ProfileScreen({ onLogout, onSwitchAccount }: { onLogout?
   const [profile, setProfile] = useState<UserProfile>({ displayName: '' });
   const [saved, setSaved] = useState(false);
   const [notifications, setNotifications] = useState(true);
+  // «Ayudar a mejorar Eris» (medición de la beta): lo decide el servidor; llega al conectar
+  const [usoMedido, setUsoMedido] = useState<boolean>(() => wsManager.getLastConnectedPayload()?.usoMedido !== false);
   const [reminders, setReminders] = useState<ReminderSettings>(DEFAULT_REMINDER_SETTINGS);
   // Cómo te habla Eris (services/tone.ts): lo eliges tú; sin elegir, cercano y directo
   const [tone, setToneState] = useState<Tone>(DEFAULT_TONE);
@@ -451,6 +453,15 @@ export default function ProfileScreen({ onLogout, onSwitchAccount }: { onLogout?
     await AsyncStorage.setItem(`eris_notifications_${profileId}`, JSON.stringify(value));
     wsManager.sendMessage({ type: 'save_preference', key: 'notifications', value });
     DeviceEventEmitter.emit(PLAN_REFRESH_EVENT); // apagado: se quitan los avisos programados; encendido: se programan
+  };
+
+  const handleToggleUso = (value: boolean) => {
+    const enviar = () => { setUsoMedido(value); wsManager.sendMessage({ type: 'save_preference', key: 'metricas_uso', value }); };
+    if (value) { enviar(); return; }
+    Alert.alert('Dejar de ayudar con datos de uso', 'Eris deja de contar cuánto usas la app y borra lo que ya había contado. Todo lo demás sigue igual.', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Apagar y borrar', style: 'destructive', onPress: enviar },
+    ]);
   };
 
   const handleToggleReminder = async (key: keyof ReminderSettings, value: boolean) => {
@@ -1438,6 +1449,24 @@ export default function ProfileScreen({ onLogout, onSwitchAccount }: { onLogout?
             <Text style={s.cardDesc}>
               Entras con tu cuenta de Google. Tu perfil está cifrado con una llave que solo guarda el servidor de Eris: no hay PIN que recordar ni que perder. Si cierras sesión en este teléfono, la sesión también se invalida en el servidor.
             </Text>
+          </View>
+
+          {/* Medición de la beta: solo conteos, con alias; apagar borra lo contado */}
+          <View style={[s.card, { marginTop: 12 }]}>
+            <View style={s.switchRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.switchLabel}>Ayudar a mejorar Eris</Text>
+                <Text style={s.switchDesc}>
+                  Eris cuenta cuántos días usas la app, cuántos mensajes le mandas, qué módulos usas y cuánto tarda en responder. Nunca lo que escribes, comes, gastas ni nada de tu salud, y sin tu nombre. Si lo apagas, se borra lo contado.
+                </Text>
+              </View>
+              <Switch
+                value={usoMedido}
+                onValueChange={handleToggleUso}
+                trackColor={{ false: T.border, true: T.accentGlow }}
+                thumbColor={usoMedido ? T.accent : T.textMuted}
+              />
+            </View>
           </View>
 
           {/* AXS Executive Mode (Solo Ikaros/Hestia) */}

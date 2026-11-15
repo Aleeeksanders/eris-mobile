@@ -48,7 +48,9 @@ export const hourOf = (d: Date) => d.getHours() + d.getMinutes() / 60;
 /** Ancla del día según la hora de despertar: 7:30 entre 5 y 9; fuera de eso se corre ¾ de lo que se corrió el despertar. */
 export function anchorHour(wakeHour?: number | null): number {
   if (!okHour(wakeHour)) return DEFAULT_ANCHOR;
-  if (wakeHour > 9) return DEFAULT_ANCHOR + 0.75 * (wakeHour - 9);
+  // Pasadas las 15:00 la tabla se corre entera: con ¾ el desayuno quedaba antes de despertar (a las 23:50 tocaba «almuerzo»).
+  // El almuerzo nunca antes de 2 h después de despertar.
+  if (wakeHour > 9) return Math.max(DEFAULT_ANCHOR + 0.75 * (wakeHour - 9), wakeHour - 3);
   if (wakeHour < 5) return DEFAULT_ANCHOR - 0.75 * (5 - wakeHour);
   return DEFAULT_ANCHOR;
 }
@@ -161,13 +163,28 @@ export function dayStartHour(usualWake?: number | null): number {
   return Math.min(15, Math.max(2, mealWindows(usualWake).desayuno[0]));
 }
 
+/** Desde esta hora, un despertar abre el día de comida SIGUIENTE (igual que sleepCore.EVENING_END_H) */
+const EVENING_WAKE_H = 18;
+
+/** El día de comida que abre un despertar (a medianoche): el de su fecha; desde las 18:00, el siguiente. */
+function wakeDayOf(wa: Date): Date {
+  const d = new Date(wa);
+  d.setHours(0, 0, 0, 0);
+  if (hourOf(wa) >= EVENING_WAKE_H) d.setDate(d.getDate() + 1);
+  return d;
+}
+
 /** El día de comida al que pertenece ese instante (a medianoche): termina cuando la persona se duerme, no a las 0:00. */
 export function nutritionDayOf(t: Date, ctx: DayCtx = {}): Date {
   const cal = new Date(t);
   cal.setHours(0, 0, 0, 0);
   const wa = dateOf(ctx.wakeAt);
-  // Ya despertó ese día (antes de t) de un sueño de 3 h o más: el día nuevo empezó
-  if (wa && wa.toDateString() === t.toDateString() && wa.getTime() <= t.getTime()) return cal;
+  // Ya despertó (antes de t) de un sueño de 3 h o más: el día nuevo empezó. Si fue en la tarde-noche, ese día ya es el de mañana:
+  // lo que comas al despertar a las 23:50 no se junta con lo que comiste antes de dormirte.
+  if (wa && wa.getTime() <= t.getTime()) {
+    const abre = wakeDayOf(wa);
+    if (abre.getTime() === cal.getTime() || (wa.toDateString() === t.toDateString() && hourOf(wa) >= EVENING_WAKE_H)) return abre;
+  }
   // Antes de la hora habitual de partida y sin haber dormido: sigue siendo el día anterior
   if (hourOf(t) < dayStartHour(ctx.usualWake)) cal.setDate(cal.getDate() - 1);
   return cal;
@@ -186,7 +203,7 @@ export function nutritionDayStart(day: Date, ctx: DayCtx = {}): Date {
   const start = new Date(d);
   start.setMinutes(Math.round(dayStartHour(ctx.usualWake) * 60));
   const wa = dateOf(ctx.wakeAt);
-  return wa && wa.toDateString() === d.toDateString() && wa.getTime() < start.getTime() ? wa : start;
+  return wa && wakeDayOf(wa).getTime() === d.getTime() && wa.getTime() < start.getTime() ? wa : start;
 }
 
 /**

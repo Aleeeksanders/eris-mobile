@@ -52,6 +52,10 @@ export interface SleepDay {
   lastWake: string | null;
   /** noche con un rato despierto largo (30 min o más) o con un segundo sueño ese día */
   split: boolean;
+  /** el día al que cuenta (YYYY-MM-DD; ver sleepKey) */
+  day: string;
+  /** el fin (ISO) de un sueño largo a hora rara que espera «¿Cómo sigues?»; null si no hay nada que preguntar */
+  pendingWake: string | null;
   /** etapas de todo el día (si el reloj las midió) */
   stages?: SleepStages;
   /** eficiencia de la noche: dormido / en cama (%) */
@@ -64,7 +68,15 @@ export interface SleepOpts {
   usualSleepH?: number | null;
   /** un despertar más corto que esto no corta la noche (min) */
   gapMin?: number;
+  /** ahora (ms). Con esto, un sueño largo a hora rara espera tu respuesta antes de correr el día; sin esto, abre el día */
+  now?: number;
+  /** lo que respondiste a «¿Cómo sigues?», por el fin de ese sueño (ISO) */
+  decisions?: WakeDecisions;
 }
+
+/** «Vuelvo a dormir» (sueño extra: tu día sigue) o «Parto mi día ahora» (el día se cuenta desde ese despertar) */
+export type WakeDecision = 'dormir' | 'partir';
+export type WakeDecisions = Record<string, WakeDecision>;
 
 const MIN = 60_000;
 const H = 3_600_000;
@@ -167,11 +179,38 @@ const kindOf = (e: Ep): EpisodeKind => (e.asleepMin >= SEGUNDO_MIN ? 'segundo' :
 
 const dayKey = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
-/** La parte más larga de 3 h o más */
-const longest = (eps: Ep[]) => eps.filter((e) => e.asleepMin >= 180).reduce<Ep | null>((a, b) => (!a || b.asleepMin > a.asleepMin ? b : a), null);
+// ─── Un sueño fuera de horario (2026-11-07) ──────────────────────────────────────────────────────────────────────────
+// El usuario durmió de 23:00 a 06:45 y otra vez de 17:30 a 23:50. Eris decía «dormiste 14 h 05» y «la noche fue partida», y a
+// las 00:40 lo daba por terminando su día, recién despierto. Cada sueño cuenta en UN solo día, y si un sueño largo termina a una
+// hora rara se le pregunta cómo sigue. Los cortes (3 h, 18:00, 8 h) son decisión de producto, no salen de un estudio.
 
-/** ¿Esta parte ya es de un día posterior a esa noche? Un sueño largo que termina otra fecha (como separa sleepByDay), o cualquier sueño tras 24 h despierto. */
-const laterDay = (e: Ep, night: Ep) => e.start >= night.end && dayKey(e.end) !== dayKey(night.end) && (e.asleepMin >= 180 || e.start - night.end >= 24 * H);
+/** Desde cuánto dormido un sueño es «largo» (min) */
+const LONG_MIN = 180;
+/** Un sueño largo que termina desde esta hora cuenta al día siguiente */
+export const EVENING_END_H = 18;
+/** Sin respuesta: si en estas horas no volviste a dormir largo, el día ya partió en ese despertar */
+export const WAKE_WAIT_H = 8;
+
+/** A qué día cuenta un sueño: el de la fecha en que terminó, salvo uno largo que termina desde las 18:00, que abre el siguiente. */
+export function sleepKey(endMs: number, asleepMin: number): string {
+  if (asleepMin < LONG_MIN || hourOf(endMs) < EVENING_END_H) return dayKey(endMs);
+  const d = new Date(endMs);
+  d.setDate(d.getDate() + 1);
+  return dayKey(d.getTime());
+}
+const epDay = (e: Ep) => sleepKey(e.end, e.asleepMin);
+
+/** ¿Despertar a esa hora es raro? Desde las 18:00, o de madrugada antes de lo que sería despertar para esta persona. */
+export function wakeIsOdd(endMs: number, o: SleepOpts = {}): boolean {
+  const w = nightWindow(o);
+  return !inWakeRange(endMs, w) && (hourOf(endMs) >= EVENING_END_H || hourOf(endMs) < w.wakeFrom);
+}
+
+/** La parte más larga de 3 h o más */
+const longest = (eps: Ep[]) => eps.filter((e) => e.asleepMin >= LONG_MIN).reduce<Ep | null>((a, b) => (!a || b.asleepMin > a.asleepMin ? b : a), null);
+
+/** ¿Esta parte ya es de un día posterior a esa noche? Un sueño largo que cuenta a otro día (como separa sleepByDay), o cualquier sueño tras 24 h despierto. */
+const laterDay = (e: Ep, night: Ep) => e.start >= night.end && epDay(e) !== epDay(night) && (e.asleepMin >= LONG_MIN || e.start - night.end >= 24 * H);
 
 /**
  * El sueño del día: la última noche y lo que vino después (siestas, un segundo sueño). `sessions` = las sesiones de Health
@@ -188,28 +227,41 @@ export function sleepDay(sessions: RawSession[], o: SleepOpts = {}): SleepDay | 
   // fuera de la ventana. El 1-11 (acostarse de madrugada y despertar pasadas las 14:00) sumó las 7 h 10 del 31-10 + 10 h 31: «17 h 41».
   const later = pick ? eps.filter((e) => laterDay(e, pick)) : [];
   const night = later.length ? longest(later) : pick;
-  // Lo del día: la noche y lo que vino después; sin noche, lo de las últimas 24 h
+  // Un sueño largo a hora rara: abre el día si dijiste «parto mi día», o si pasaron 8 h sin volver a dormir largo. Mientras no se
+  // sepa, y con «vuelvo a dormir», es un sueño extra: el día sigue contado desde el despertar anterior.
+  const odd = !!night && night.asleepMin >= LONG_MIN && wakeIsOdd(night.end, o);
+  const endIso = night ? new Date(night.end).toISOString() : '';
+  const said = odd ? o.decisions?.[endIso] : undefined;
+  const waited = !night || o.now == null || o.now - night.end >= WAKE_WAIT_H * H;
+  const extra = odd && (said === 'dormir' || (!said && !waited));
+  const anchor = extra ? (pick && pick !== night ? pick : null) : night;
+  // Lo del día: la noche, lo que vino después y lo que cuenta a ese mismo día; sin noche, lo de las últimas 24 h
   const lastEnd = eps[eps.length - 1].end;
-  const day = night ? eps.filter((e) => e.start >= night.start) : eps.filter((e) => e.end > lastEnd - 24 * H);
-  const episodes = day.map((e) => toEpisode(e, e === night ? 'noche' : kindOf(e)));
+  const nightDay = night ? epDay(night) : null;
+  const day = night ? eps.filter((e) => e.start >= night.start || epDay(e) === nightDay) : eps.filter((e) => e.end > lastEnd - 24 * H);
+  const episodes = day.map((e) => toEpisode(e, e === night && !extra ? 'noche' : kindOf(e)));
   const totalMin = day.reduce((a, e) => a + e.asleepMin, 0);
   const staged = episodes.filter((e) => e.stages);
   const stages = staged.length
     ? { light: r2(staged.reduce((a, e) => a + e.stages!.light, 0)), deep: r2(staged.reduce((a, e) => a + e.stages!.deep, 0)), rem: r2(staged.reduce((a, e) => a + e.stages!.rem, 0)) }
     : undefined;
   const n = episodes.find((e) => e.kind === 'noche') ?? null;
-  const nightEp = night ? day.find((e) => e === night)! : null;
+  const nightEp = night && !extra ? day.find((e) => e === night)! : null;
   return {
     episodes, night: n, totalH: r2(totalMin / 60), nightH: n ? n.asleepH : null,
-    dayWake: n ? n.end : null, lastWake: new Date(day[day.length - 1].end).toISOString(),
-    split: !!n && (n.awakeMin >= 30 || episodes.some((e) => e.kind === 'segundo')),
+    dayWake: anchor ? new Date(anchor.end).toISOString() : null, lastWake: new Date(day[day.length - 1].end).toISOString(),
+    // «Partida» solo si la noche de verdad se cortó: despierto en medio, o una noche corta que siguió en otro sueño. Dormir bien de
+    // noche y otro rato después no es una noche partida.
+    split: !!n && (n.awakeMin >= 30 || (n.asleepH < 6 && episodes.some((e) => e.kind === 'segundo'))),
+    day: nightDay ?? sleepKey(day[day.length - 1].end, day[day.length - 1].asleepMin),
+    pendingWake: extra && !said ? endIso : null,
     ...(stages ? { stages } : {}),
     ...(nightEp ? { efficiency: Math.round((nightEp.asleepMin / Math.max(1, (nightEp.end - nightEp.start) / MIN)) * 100) } : {}),
   };
 }
 
 /**
- * El historial por día (el día en que terminó cada parte): lo dormido en total y en la noche, y la hora en que terminó la
+ * El historial por día (el día al que cuenta cada parte, ver sleepKey): lo dormido en total y en la noche, y la hora en que terminó la
  * noche. Para el registro diario y el despertar habitual.
  */
 export interface DayRecord { totalH: number; nightH: number | null; nightEnd: number | null; nightStart: number | null; nightAwakeMin: number | null }
@@ -218,7 +270,7 @@ export function sleepByDay(sessions: RawSession[], o: SleepOpts = {}): Map<strin
   const w = nightWindow(o);
   const out = new Map<string, { totalMin: number; night: Ep | null; long: Ep | null }>();
   for (const e of eps) {
-    const k = dayKey(e.end);
+    const k = epDay(e);
     const cur = out.get(k) ?? { totalMin: 0, night: null, long: null };
     cur.totalMin += e.asleepMin;
     if (nightCandidate(e, w) && (!cur.night || e.asleepMin > cur.night.asleepMin)) cur.night = e;
@@ -412,7 +464,9 @@ export function sleepInsights(sessions: RawSession[], o: SleepOpts & { now: numb
   // Hoy: la noche y la hora para acostarse (despertar habitual − necesidad); una siesta o un segundo sueño de más de 30 min
   // corre la hora media hora por cada hora dormida (hasta 2 h): esa noche cuesta más dormirse
   const today = sleepDay(sessions.filter((s) => s.end > o.now - 36 * H), o);
-  const wake = typeof o.usualWake === 'number' ? o.usualWake : usualWakeH ?? 7.5;
+  // Partiste tu día en un despertar raro: tu próxima noche se cuenta desde ahí (no desde tu hora de siempre: serían ~24 h despierto)
+  const partio = today?.night && today.dayWake === today.night.end && wakeIsOdd(Date.parse(today.night.end), o);
+  const wake = partio ? hourOf(Date.parse(today!.night!.end)) : typeof o.usualWake === 'number' ? o.usualWake : usualWakeH ?? 7.5;
   const naps = today ? today.episodes.filter((e) => e.kind !== 'noche' && Date.parse(e.end) > o.now - 18 * H) : [];
   const napH = naps.reduce((a, e) => a + e.asleepH, 0);
   const napShiftMin = napH > 0.5 ? Math.min(120, Math.round((napH * 30) / 15) * 15) : 0;
@@ -518,11 +572,105 @@ export function sleepReading(d: Pick<SleepDay, 'totalH' | 'nightH' | 'split' | '
 
 // ─── Sueño 2.0 · S2 (2026-10-28): lo que necesita la pantalla de Sueño ─────────────────────────────────────────────────
 
-/** El sueño de un día cualquiera (YYYY-MM-DD): la noche que terminó ese día y lo que vino después ese mismo día. */
+/** El sueño de un día cualquiera (YYYY-MM-DD): lo que cuenta a ese día, nada más (cada sueño está en un solo día). */
 export function sleepDayOn(sessions: RawSession[], day: string, o: SleepOpts = {}): SleepDay | null {
   const [y, m, d] = day.split('-').map(Number);
   const start = new Date(y, m - 1, d).getTime();
-  return sleepDay(sessions.filter((s) => s.end > start - 12 * H && s.end <= start + 24 * H), o);
+  const near = sessions.filter((s) => s.end > start - 24 * H && s.end <= start + 24 * H);
+  const eps = episodesOf(sleepBlocks(near), o.gapMin ?? GAP_MIN).filter((e) => epDay(e) === day);
+  const kept = near.filter((s) => eps.some((e) => s.start < e.end && s.end > e.start));
+  return kept.length ? sleepDay(kept, o) : null;
+}
+
+// ─── Anotar con dos horas, sin fechas (2026-11-07) ───────────────────────────────────────────────────────────────────
+// Sin reloj, lo anotado es lo único que Eris sabe de tu sueño. Antes: «Corregir» → «Anotar a mano», de a 15 min o 1 h, con fecha:
+// de 15 a 38 toques para 17:30–23:50, y a las 23:50 no se llegaba. La persona dice las horas; el día lo deduce Eris.
+
+/** La última vez, antes de `before`, que el reloj marcó esos minutos del día */
+function lastClock(min: number, before: number): number {
+  const d = new Date(before);
+  d.setHours(0, min, 0, 0);
+  if (d.getTime() > before) { d.setDate(d.getDate() - 1); d.setHours(0, min, 0, 0); }
+  return d.getTime();
+}
+
+/** «17:30» + «23:50» → el tramo más reciente que ya pasó. `daysBack`: el mismo tramo, tantos días antes. null si dura menos de 15 min o más de 16 h. */
+export function resolveSleepTimes(startMin: number, endMin: number, now: number, daysBack = 0): { start: number; end: number } | null {
+  const end0 = lastClock(endMin, now);
+  const start0 = lastClock(startMin, end0 - MIN);
+  const back = (ms: number) => { const d = new Date(ms); d.setDate(d.getDate() - daysBack); return d.getTime(); };
+  const start = back(start0), end = back(end0);
+  return end - start >= 15 * MIN && end - start <= 16 * H ? { start, end } : null;
+}
+
+/** Una hora que dijo alguien: `amb` si puede ser de día o de noche («5:30», sin am ni pm) */
+export interface SaidTime { min: number; amb: boolean }
+const NIGHT_MIN_H = 3;
+
+/**
+ * El tramo de dos horas dichas, sin fecha. Si alguna puede ser am o pm: el que cubre 3 h o más de la madrugada («de 10 a 6», dicho a
+ * las 20:00, es 22:00–06:00); si no hay, el más reciente («de 5:30 a 11:50», a las 00:40, es 17:30–23:50). `end` = 'ahora': recién.
+ */
+export function resolveSaidTimes(a: SaidTime, b: SaidTime | 'ahora', now: number): { start: number; end: number } | null {
+  const opts = (t: SaidTime) => (t.amb ? [t.min, (t.min + 720) % 1440] : [t.min]);
+  const ends = b === 'ahora' ? [now] : opts(b).map((m) => lastClock(m, now));
+  const pairs: Array<{ start: number; end: number }> = [];
+  for (const end of ends) {
+    // Si hay dos opciones de inicio, la más cercana antes del fin: «de 11 a 7» son 8 h, no 20
+    const start = Math.max(...opts(a).map((m) => lastClock(m, end - MIN)));
+    if (end - start >= 15 * MIN && end - start <= 16 * H) pairs.push({ start, end });
+  }
+  if (!pairs.length) return null;
+  const madrugada = (p: { start: number; end: number }) => {
+    const d = new Date(p.end); d.setHours(0, 0, 0, 0);
+    return (Math.min(p.end, d.getTime() + 6 * H) - Math.max(p.start, d.getTime())) / H;
+  };
+  const noche = pairs.filter((p) => madrugada(p) >= NIGHT_MIN_H).sort((x, y) => y.end - x.end)[0];
+  return noche ?? pairs.sort((x, y) => y.end - x.end)[0];
+}
+
+/** Lo que alguien escribe: «1730», «17:30», «730», «7» → minutos del día. null si no es una hora. */
+export function parseClock(raw: string): number | null {
+  const s = String(raw).replace(/[^\d]/g, '');
+  if (!s || s.length > 4) return null;
+  const h = s.length <= 2 ? Number(s) : Number(s.slice(0, -2));
+  const m = s.length <= 2 ? 0 : Number(s.slice(-2));
+  return h <= 23 && m <= 59 ? h * 60 + m : null;
+}
+/** 1050 → «17:30» */
+export const clockOfMin = (min: number) => { const m = ((Math.round(min) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+
+/** «Hoy», «Ayer», «Anteayer» o «3/11» */
+export function dayWord(ms: number, now: number): string {
+  const cero = (x: number) => { const d = new Date(x); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const n = Math.round((cero(now) - cero(ms)) / (24 * H));
+  if (n === 0) return 'Hoy';
+  if (n === 1) return 'Ayer';
+  if (n === 2) return 'Anteayer';
+  const d = new Date(ms);
+  return `${d.getDate()}/${d.getMonth() + 1}`;
+}
+
+/** «Ayer, de 17:30 a 23:50 · 6 h 20» */
+export function sleepRangeText(start: number, end: number, now: number): string {
+  return `${dayWord(end, now)}, de ${clock(new Date(start).toISOString())} a ${clock(new Date(end).toISOString())} · ${fmtSleep((end - start) / H)}`;
+}
+
+/** Lo que pregunta Eris tras un sueño largo a hora rara */
+export const wakeQuestionText = (endIso: string) => `Despertaste a las ${clock(endIso)}. ¿Cómo sigues?`;
+export const WAKE_OPTIONS: Array<{ id: WakeDecision; label: string }> = [{ id: 'dormir', label: 'Vuelvo a dormir' }, { id: 'partir', label: 'Parto mi día ahora' }];
+
+/**
+ * ¿Se ofrece «Recién desperté» en Inicio? Sin el reloj (lo último anotado a mano), Eris no sabe que despertaste hasta que se lo dices:
+ * siempre, salvo que hayas anotado hace poco. Con reloj, solo si en tu mañana no ha llegado nada del sueño de anoche.
+ */
+export function wakePrompt(i: { now: number; lastWake: number | null; lastIsManual: boolean; usualWake?: number | null }): boolean {
+  const awakeH = i.lastWake == null ? Infinity : (i.now - i.lastWake) / H;
+  if (awakeH < 3) return false;
+  if (i.lastIsManual) return true;
+  const usual = typeof i.usualWake === 'number' ? i.usualWake : 7.5;
+  const rel = ((hourOf(i.now) - usual + 36) % 24) - 12; // horas desde tu despertar de siempre, de −12 a 12
+  return awakeH >= 12 && rel >= -2 && rel <= 6;
 }
 
 /** Las etapas en el tiempo (hipnograma), como las dibuja el reloj; sin etapas, «dormido» de punta a punta. */
@@ -560,7 +708,7 @@ export const STAGE_RANGES: Record<'ligero' | 'profundo' | 'rem', [number, number
  * Las correcciones de la persona: lo que el reloj marcó y no era sueño («no estaba durmiendo»: el sillón, el reloj cargando)
  * y lo que durmió sin el reloj («anotar a mano»). Un tramo se quita si la corrección cubre la mitad o más de él.
  */
-export interface SleepEdits { excluded: Array<{ start: number; end: number }>; manual: Array<{ start: number; end: number }> }
+export interface SleepEdits { excluded: Array<{ start: number; end: number }>; manual: Array<{ start: number; end: number }>; decisions?: WakeDecisions }
 export function applySleepEdits(sessions: RawSession[], e: SleepEdits | null | undefined): RawSession[] {
   if (!e) return sessions;
   const kept = sessions.filter((s) => !(e.excluded ?? []).some((x) => (Math.min(s.end, x.end) - Math.max(s.start, x.start)) >= (s.end - s.start) * 0.5));

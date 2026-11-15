@@ -172,6 +172,10 @@ export interface HealthSnapshot {
     split?: boolean;
     /** las partes del día, como en el reloj (services/sleep/sleepCore.ts) */
     episodes?: SleepEpisode[];
+    /** a qué día cuenta (YYYY-MM-DD) */
+    day?: string;
+    /** el fin de un sueño largo a hora rara que espera «¿Cómo sigues?» */
+    pendingWake?: string | null;
     /** durante la noche: pulso medio y mínimo, oxígeno (promedio y mínimo) y respiración */
     during?: { hr?: number; hrMin?: number; spo2?: number; spo2Min?: number; resp?: number };
   } | null;
@@ -532,7 +536,8 @@ class MetricsService {
         timeRangeFilter: { operator: 'between', startTime: sleep15.toISOString(), endTime: now.toISOString() }
       });
       // Con las correcciones de la persona (S2): «no estaba durmiendo» y lo anotado a mano en la pantalla de Sueño
-      const sleepRaw = applySleepEdits(toRawSessions(sleepAll.records as any[]), await loadSleepEdits());
+      const sleepEdits = await loadSleepEdits();
+      const sleepRaw = applySleepEdits(toRawSessions(sleepAll.records as any[]), sleepEdits);
       const sleepRecent = sleepRaw.filter((x) => x.end > sleepFrom.getTime());
       // El "día" del cuerpo empieza cuando despierta de sueño REAL, no a medianoche —
       // por defecto cae a medianoche (todayStart) si no hay sueño real detectado.
@@ -543,10 +548,11 @@ class MetricsService {
         // segundo sueño o las siestas, como en Mi Fitness. Antes se botaba lo de menos de 3 h, todo lo demás se sumaba como «una
         // noche» y el día empezaba al terminar el tramo más largo: el 24-10 (02:33–03:18 + 04:20–09:05 + 13:51–17:54, 9 h 31 en
         // el reloj) salió «8,8 h, descanso suficiente».
-        const day = sleepDay(sleepRecent, { usualWake: daySchedule.usualWake(), usualSleepH: daySchedule.sleepHours() });
+        const sleepOpts = { usualWake: daySchedule.usualWake(), usualSleepH: daySchedule.sleepHours(), now: now.getTime(), decisions: sleepEdits.decisions };
+        const day = sleepDay(sleepRecent, sleepOpts);
         // Las 2 semanas: deuda, regularidad, cronotipo, el puntaje de la noche y la hora para acostarse (sleepCore · S1)
         try {
-          snapshot.sleepInsights = sleepInsights(sleepRaw, { now: now.getTime(), usualWake: daySchedule.usualWake(), usualSleepH: daySchedule.sleepHours() });
+          snapshot.sleepInsights = sleepInsights(sleepRaw, sleepOpts);
         } catch { /* sin historia suficiente */ }
         try {
           const plan = await loadSleepPlan();
@@ -569,6 +575,8 @@ class MetricsService {
             startTime: n?.start ?? day.episodes[0].start,
             endTime: n?.end ?? day.episodes[day.episodes.length - 1].end,
             episodes: day.episodes,
+            day: day.day, // a qué día cuenta: a las 00:40 la noche de ayer no es el sueño de hoy
+            pendingWake: day.pendingWake,
           };
           // El último despertar (de una siesta incluida) y el del DÍA: el que viene de la noche, nunca de una siesta
           snapshot.wakeTime = day.lastWake ?? undefined;

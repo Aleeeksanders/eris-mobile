@@ -20,6 +20,7 @@ import { usePersona } from '../config/persona';
 import ModeSwitch from '../components/ModeSwitch';
 import InternalClock from '../components/InternalClock';
 import SleepScreen from './sleep/SleepScreen';
+import WakeCard from '../components/home/WakeCard';
 import { sleepDayTip, lastSleepFrom } from '../services/sleep/sleepCore';
 import { usePerfilMedico } from './inventory/useMedical';
 import NowCard from '../components/home/NowCard';
@@ -818,6 +819,8 @@ export default function HomeScreen({ onNavigateToChat }: { onNavigateToChat?: (m
 
         {/* «¿Qué recomienda Eris?» (Eris al timón): sin plan, el botón; con plan, la tarjeta con lo que viene y un toque por paso */}
         <ErisPlan />
+
+        <WakeCard wakeTime={snapshot.wakeTime} pendingWake={snapshot.sleep?.pendingWake} usualOnset={snapshot.sleepInsights?.usualOnset} need={snapshot.sleepInsights?.need} />
 
         <View ref={tourRef('home.now')} collapsable={false}>
         <NowCard
