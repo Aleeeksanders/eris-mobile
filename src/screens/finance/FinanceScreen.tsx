@@ -137,7 +137,8 @@ function NativeFinance({ onExit, active }: { onExit?: () => void; active: boolea
   useEffect(() => {
     if (!active || !listo) return;
     const abrir = () => {
-      const id = financeAuto.takePendingOpen(); if (id != null && financeStoreHas(id)) { irA('hoy'); setSheet({ k: 'tx', id }); return; }
+      const id = financeAuto.takePendingOpen(), foto = financeAuto.takePendingFoto();
+      if (id != null && financeStoreHas(id)) { irA('hoy'); setSheet({ k: 'tx', id, ...(foto ? { foto: true } : {}) }); return; }
       // «Ver» del cuadre (la notificación o el Plan de Eris): la hoja «Cuadrar» de esa cuenta
       const c = financeCuadre.takePendingOpen(); if (c) { irA('hoy'); setSheet({ k: 'cuadrar', ref: c.ref }); }
     };

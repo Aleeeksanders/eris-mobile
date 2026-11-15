@@ -119,6 +119,10 @@ export function AutoPanel({ hechos, open }: { hechos: AutoEntry[]; open: (s: She
           </View>
           <View style={s.btns}>
             <Btn small ghost label="Cambiar" color={FX.violet} onPress={() => open({ k: 'tx', id: e.txId })} />
+            {/* Una compra del súper, la farmacia o la casa: su boleta (qué compraste; lo de la casa al inventario) */}
+            {e.como === 'gasto' && ['alimentacion', 'hogar', 'salud'].includes(String(e.cat)) && !e.conBoleta && (
+              <Btn small ghost label="🧾" color={FX.cyan} onPress={() => open({ k: 'tx', id: e.txId, foto: true })} />
+            )}
             <Btn small ghost label="↶" color={FX.muted} onPress={() => deshacer(e)} />
           </View>
         </View>

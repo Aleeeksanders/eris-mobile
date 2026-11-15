@@ -121,10 +121,35 @@ export function boletaAnotada(tx: Array<{ boleta?: unknown; fecha?: unknown; mon
 }
 
 // ─── La foto de la boleta (lo lee el PC: eris/src/services/ReceiptOcr.ts) ──────────────────────────────────
-export interface ItemBoleta { desc: string; monto: number; descuento?: number; cant?: number; unit?: number; cat?: string }
+export interface ItemBoleta {
+  desc: string; monto: number; descuento?: number; cant?: number; unit?: number; cat?: string;
+  /** el código de barras impreso al comienzo de la línea (Jumbo, Lider…): con él el Inventario reconoce el producto */
+  ean?: string;
+  /** su precio no se pudo leer: es lo que faltaba para el total */
+  estimado?: boolean;
+}
 export interface BoletaFoto {
   ok: true; comercio?: string; rut?: string; fecha?: string; hora?: string; folio?: number;
   items: ItemBoleta[]; total?: number; suma: number; cuadra: boolean; dudosas: string[];
+  /** los precios venían sin IVA (factura) y ya se le sumó a cada producto */
+  ivaAparte?: boolean; iva?: number;
+  /** productos que están pero sin precio legible: van al inventario; la plata, a «lo que no alcancé a leer» */
+  sinPrecio?: Array<{ desc: string; ean?: string; cant?: number }>;
+}
+
+/**
+ * Lo que el timbre dice que se pagó y la suma de los productos es el neto (sin IVA): se le suma el IVA a cada producto.
+ * Respaldo en el teléfono por si la lectura del PC no lo vio (sin la línea del IVA, o un PC con el lector antiguo).
+ */
+export function conIvaDelTimbre(b: BoletaFoto, pagado: number | null | undefined): BoletaFoto {
+  if (b.ivaAparte || !(pagado && pagado > 0) || b.sinPrecio?.length) return b;
+  const suma = b.items.reduce((s, i) => s + i.monto, 0);
+  if (!(suma > 0) || Math.abs(suma - pagado) <= 1 || Math.abs(Math.round(suma * 1.19) - pagado) > Math.max(3, b.items.length)) return b;
+  const k = pagado / suma;
+  const items = b.items.map((it) => ({ ...it, monto: Math.round(it.monto * k), ...(it.unit ? { unit: Math.round(it.unit * k) } : {}), ...(it.descuento ? { descuento: Math.round(it.descuento * k) } : {}) }));
+  const dif = pagado - items.reduce((s, i) => s + i.monto, 0);
+  if (dif) { let m = 0; items.forEach((it, i) => { if (it.monto > items[m].monto) m = i; }); items[m] = { ...items[m], monto: items[m].monto + dif }; }
+  return { ...b, items, total: pagado, suma: pagado, cuadra: true, ivaAparte: true, iva: pagado - suma };
 }
 export interface GrupoBoleta { cat: string; items: Array<ItemBoleta & { i: number }>; monto: number }
 

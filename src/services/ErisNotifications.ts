@@ -112,10 +112,12 @@ export const PLAN_PREFIX = 'eris-plan-';
 const PLAN_KINDS = new Set<string>(['meal', 'water', 'training', 'finance', 'summary', 'supplement', 'focus', 'sleep']);
 /** Los avisos de «Mis suplementos» (fase I5): los programa supplementStore, aparte de los del día. */
 export const SUP_PREFIX = 'eris-sup-';
+/** Una compra con boleta de productos (súper, farmacia, casa): la notificación de lo que Eris anotó ofrece «🧾 Boleta» */
+const conBoleta = (h: { como?: string; cat?: string }) => (h.como === 'gasto' || h.como == null) && ['alimentacion', 'hogar', 'salud'].includes(String(h.cat));
 const CATEGORY_IDS: Record<string, string> = {
   meal: 'eris-comida', meal_ideas: 'eris-comida-ideas', water: 'eris-agua', training: 'eris-entreno', finance: 'eris-finanzas',
   intent: 'eris-entreno-hoy', supplement: 'eris-suplemento', plan_meal: 'eris-plan-comida', plan_cue: 'eris-plan-paso',
-  fin_auto: 'eris-fin-auto', fin_auto_varios: 'eris-fin-auto-varios', fin_auto_abono: 'eris-fin-auto-abono',
+  fin_auto: 'eris-fin-auto', fin_auto_varios: 'eris-fin-auto-varios', fin_auto_abono: 'eris-fin-auto-abono', fin_auto_compra: 'eris-fin-auto-compra',
   fin_cuadre: 'eris-fin-cuadre', fin_cuadre_ver: 'eris-fin-cuadre-ver', fin_cuadre_hecho: 'eris-fin-cuadre-hecho',
 };
 const PENDING_WATER_KEY = 'eris_pending_water_quick';
@@ -199,6 +201,8 @@ class ErisNotificationsService {
         [CATEGORY_IDS.plan_cue, [['plan_hecho', 'Hecho ✓', false], ['plan_ver', 'Ver mi día', true]]],
         // Eris administra: lo que anotó sola de un aviso del banco. «Deshacer» sin abrir la app; «Cambiar» abre el movimiento
         [CATEGORY_IDS.fin_auto, [['fin_deshacer', 'Deshacer', false], ['fin_cambiar', 'Cambiar', true]]],
+        // Una compra que Eris anotó: «🧾 Boleta» abre la cámara para ese gasto (qué compraste y lo de la casa al inventario)
+        [CATEGORY_IDS.fin_auto_compra, [['fin_deshacer', 'Deshacer', false], ['fin_cambiar', 'Cambiar', true], ['fin_boleta', '🧾 Boleta', true]]],
         [CATEGORY_IDS.fin_auto_varios, [['fin_ver', 'Ver', true]]],
         // Plata que entró y quedó como abono: «Fue un ingreso» la cambia sin abrir la app (y se aprende para esa persona)
         [CATEGORY_IDS.fin_auto_abono, [['fin_deshacer', 'Deshacer', false], ['fin_ingreso', 'Fue un ingreso', false]]],
@@ -385,7 +389,7 @@ class ErisNotificationsService {
     }
     if (data.kind !== 'finance_auto') return;
     Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {});
-    if (data.txId != null && resp.actionIdentifier !== 'fin_ver') { try { require('./finance/financeAuto').financeAuto.openTx(data.txId); } catch {} }
+    if (data.txId != null && resp.actionIdentifier !== 'fin_ver') { try { require('./finance/financeAuto').financeAuto.openTx(data.txId, { foto: resp.actionIdentifier === 'fin_boleta' }); } catch {} }
   }
 
   /**
@@ -402,7 +406,7 @@ class ErisNotificationsService {
       : `${hechos.slice(0, 4).map((h) => `${h.desc} ${clp(h.monto)}`).join(' · ')}${hechos.length > 4 ? ` y ${hechos.length - 4} más` : ''}. Revísalos en Finanzas.`;
     await this.show('finance_auto', {
       title, body, color: '#E0B454', sound: false,
-      categoryIdentifier: !uno ? CATEGORY_IDS.fin_auto_varios : uno.como === 'abono' ? CATEGORY_IDS.fin_auto_abono : CATEGORY_IDS.fin_auto,
+      categoryIdentifier: !uno ? CATEGORY_IDS.fin_auto_varios : uno.como === 'abono' ? CATEGORY_IDS.fin_auto_abono : conBoleta(uno) ? CATEGORY_IDS.fin_auto_compra : CATEGORY_IDS.fin_auto,
       data: { tap: 'finanzas', ...(uno ? { clave: uno.clave, txId: uno.txId } : {}) },
     }, `eris-fin-auto-${uno ? uno.clave.replace(/[^\w-]/g, '') : Date.now()}`);
   }

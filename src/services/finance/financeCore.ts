@@ -423,6 +423,58 @@ export function asignarCuenta(W: FinanceState, kind: 'tx' | 'prog', id: unknown,
  * Cambiar la categoría o la cuenta de un gasto ya anotado (Eris administra, 2026-10-30: lo que Eris anotó sola de un aviso
  * del banco se corrige con «Cambiar»). La cuenta nueva tiene que tener con qué; las cuotas solo quedan en crédito.
  */
+// ─── La boleta de un gasto que ya está anotado (2026-11-15) ────────────────────────────────────────────
+// Pedido del usuario: «Finanzas mueve sola la plata» (el aviso del banco anota la compra). La foto de la boleta ya no
+// anota OTRO gasto: completa ese con el detalle (productos, desglose por categoría) y los productos van al Inventario.
+
+const diaDe = (f: unknown) => Date.parse(`${String(f).slice(0, 10)}T12:00:00`);
+/** Nombres que no dicen dónde fue la compra («Compra con MACH», «Compra MACHBANK»): la boleta los reemplaza */
+const DESC_GENERICA = /^(compra|pago|cargo|boleta)\b|machbank|^gasto$/i;
+
+/**
+ * El gasto que esta boleta completa: el mismo monto (±$1), el mismo día ±1 y sin boleta; primero el que vino de un aviso
+ * del banco o de la cartola, después el más cercano en la fecha. No un fijo (arriendo, cuentas).
+ */
+export function gastoDeLaBoleta(S: Pick<FinanceState, 'tx'>, b: { total: number; fecha?: string | null }): Tx | null {
+  const m = Math.round(Number(b.total) || 0);
+  if (!(m > 0)) return null;
+  const d0 = b.fecha ? diaDe(b.fecha) : NaN;
+  const cands = S.tx.filter((t) => t.tipo === 'gasto' && !t.boleta && t.progId == null && t.recurId == null
+    && Math.abs(Math.round(t.monto) - m) <= 1 && (!Number.isFinite(d0) || Math.abs(diaDe(t.fecha) - d0) <= 86_400_000 * 1.01));
+  if (!cands.length) return null;
+  const delBanco = (t: Tx) => (t.notif || t.via === 'banco' || t.via === 'cartola' ? 0 : 1);
+  return cands.sort((a, c) => delBanco(a) - delBanco(c) || (Number.isFinite(d0) ? Math.abs(diaDe(a.fecha) - d0) - Math.abs(diaDe(c.fecha) - d0) : 0))[0];
+}
+
+/**
+ * Le pone la boleta a un gasto que ya existe: la plata NO se mueve (el monto, la cuenta y la fecha son los del banco); se
+ * agregan los productos y el desglose por categoría, repartido en proporción si la boleta no suma justo lo del cargo.
+ */
+export function completarConBoleta(W: FinanceState, id: Tx['id'], f: { desc?: string; cat?: string; partes?: Array<{ cat: string; monto: number }>; boleta: Record<string, unknown> }): FormResult & { tx?: Tx } {
+  const t = W.tx.find((x) => x.id === id);
+  if (!t || t.tipo !== 'gasto') return NO('No encontré ese gasto');
+  if (t.boleta) return NO('Ese gasto ya tiene su boleta');
+  const n: Tx = { ...t, boleta: f.boleta };
+  const ps = (f.partes ?? []).map((p) => ({ cat: (CATEGORIAS as readonly string[]).includes(p.cat) ? p.cat : 'otros', monto: num(p.monto) })).filter((p) => p.monto > 0);
+  if (ps.length > 1) {
+    const porCat = new Map<string, number>();
+    for (const p of ps) porCat.set(p.cat, (porCat.get(p.cat) ?? 0) + p.monto);
+    const suma = [...porCat.values()].reduce((a, v) => a + v, 0);
+    const k = t.monto / (suma || 1);
+    const xs = [...porCat.entries()].map(([c, m]) => ({ cat: c, monto: Math.round(m * k) })).sort((a, b) => b.monto - a.monto);
+    if (xs.length > 1) {
+      xs[0].monto += t.monto - xs.reduce((a, p) => a + p.monto, 0); // que cuadre al peso con lo que cobró el banco
+      n.partes = xs; n.cat = xs[0].cat;
+    } else { delete n.partes; n.cat = xs[0].cat; }
+  } else if (f.cat && (CATEGORIAS as readonly string[]).includes(f.cat)) {
+    delete n.partes; n.cat = f.cat;
+  }
+  const desc = String(f.desc ?? '').trim();
+  if (desc && DESC_GENERICA.test(String(t.desc).trim())) n.desc = desc;
+  W.tx = W.tx.map((x) => (x.id === id ? n : x));
+  return { ...OK(`Le agregué la boleta a ${n.desc}`), tx: n };
+}
+
 export function editarGasto(W: FinanceState, id: Tx['id'], f: { cat?: string; cuenta?: Ref | null }): FormResult {
   const t = W.tx.find((x) => x.id === id);
   if (!t || t.tipo !== 'gasto') return NO('No encontré ese gasto');

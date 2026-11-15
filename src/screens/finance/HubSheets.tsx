@@ -74,7 +74,8 @@ export function GuiaSheet({ onClose, open, irA, onTour }: { onClose: () => void;
   const ir = (sec: Seccion) => () => { onClose(); irA(sec); };
   const items: Array<{ q: string; a: string; label?: string; run?: () => void }> = [
     { q: 'Anotar un gasto', a: 'Botón + → Un gasto. O dile a Eris: «gasté 5 lucas en almuerzo».', label: 'Anotar', run: () => open({ k: 'gasto' }) },
-    { q: 'Anotar una boleta entera', a: '+ → Foto de la boleta. Revisas las categorías y anotas todo de una vez.', label: 'Sacar foto', run: () => open({ k: 'gasto', foto: true }) },
+    { q: 'Anotar una boleta entera', a: '+ → Foto de la boleta: de cerca, desde arriba hasta el TOTAL. Revisas las categorías y anotas todo de una vez. Si el aviso del banco ya anotó esa compra, la boleta la completa (no la anota dos veces) y lo de la casa va al Inventario, reconocido por el código de barras de cada producto.', label: 'Sacar foto', run: () => open({ k: 'gasto', foto: true }) },
+    { q: 'Agregarle la boleta a algo que Eris ya anotó', a: 'Toca el gasto (o 🧾 en «Anotó Eris», o «🧾 Boleta» en la notificación) → Agregar la boleta. La plata no se mueve de nuevo: se agregan los productos y el desglose.', label: 'Ir a Hoy', run: ir('hoy') },
     { q: 'Me llegó el sueldo', a: 'En su día aparece en Hoy «¿Llegó tu sueldo?»: tocas ✓ Llegó. Se configura una vez en Plan → Tu sueldo.', label: 'Configurar sueldo', run: () => open({ k: 'sueldo' }) },
     { q: 'Mi sueldo llega el último día hábil', a: 'Plan → Tu sueldo → Día de pago → «Último día hábil del mes». Cuenta los fines de semana y los feriados de Chile.', label: 'Configurar sueldo', run: () => open({ k: 'sueldo' }) },
     { q: 'Un descuento por planilla', a: 'Plan → + Gasto fijo → «Viene descontado del sueldo». No pasa por tus cuentas: se anota cuando confirmas que llegó el sueldo.', label: 'Agregar', run: () => open({ k: 'prog', tipo: 'gasto' }) },

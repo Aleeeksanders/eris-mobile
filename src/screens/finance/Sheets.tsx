@@ -6,7 +6,7 @@ import { Sheet, Field, CatPicker, AccountPicker, Chip, Label, Btn, type CuentaOp
 import {
   estado, vistas, todayStr, formGasto, formCuenta, formMov, formAhorro, formPrestamo, formSueldo, formProg, formMeta, ULT_HABIL,
   formConfirmarIngreso, marcarCobrado, borrar, avisoBorrar, sueldoEsperado, simularCompra, CASH, conEfectivo, formEfectivo, porOrdenar, asignarCuenta, vistaCuenta,
-  partesDe, editarGasto, type Ref, type TipoCuenta,
+  partesDe, editarGasto, gastoDeLaBoleta, completarConBoleta, type Ref, type TipoCuenta, type Tx,
 } from '../../services/finance/financeCore';
 import { TIPO_LABEL, txLook } from './tabs/Movimientos';
 import ReceiptScanner from './ReceiptScanner';
@@ -14,7 +14,8 @@ import ReceiptPhoto from './ReceiptPhoto';
 import { FechaCampo, DiaCampo } from './Calendario';
 import { leerBoletaEnPC } from '../../services/finance/boletaFoto';
 import { financeInbox } from '../../services/finance/financeInbox';
-import { esCompra, boletaAnotada, TIPOS_DTE, comercioDe, agruparBoleta, claveBoletaFoto, type Timbre } from '../../services/finance/receiptTed';
+import { esCompra, boletaAnotada, TIPOS_DTE, comercioDe, agruparBoleta, claveBoletaFoto, conIvaDelTimbre, type Timbre } from '../../services/finance/receiptTed';
+import { foodSearchService } from '../../services/FoodSearchService';
 import type { SheetState, View as FinView, Act, Seccion } from './types';
 import { MenuSheet, CartolaSheet, GuiaSheet, AjustesSheet } from './HubSheets';
 import AvisoSheet from './AvisoSheet';
@@ -22,7 +23,7 @@ import { CuadrarSheet } from './Cuadre';
 import { convertirEnPropia, editarEntrada } from '../../services/finance/bankAuto';
 import type { FinanceState } from '../../services/finance/financeCore';
 import InfoTip from '../../components/InfoTip';
-import { lineaDeBoleta, destinoBoleta, agregar, fmtCant, AREA, AREAS, type AreaId, type InventoryState } from '../../services/inventory/inventoryCore';
+import { lineaDeBoleta, destinoBoleta, agregar, fmtCant, areaPara, AREA, AREAS, type AreaId, type InventoryState } from '../../services/inventory/inventoryCore';
 import { inventoryStore } from '../../services/inventory/inventoryStore';
 import { ModuleStorage } from '../../services/ModuleStorage';
 import { AuthStorage } from '../../services/AuthStorage';
@@ -54,6 +55,31 @@ export default function FinanceSheets({ sheet, onClose, open, S, V, act, irA, im
   const [scan, setScan] = useState(false);
   const [foto, setFoto] = useState(false);
   const [leyendo, setLeyendo] = useState(false);
+  // La foto de la boleta para un gasto que ya está anotado (el que Eris anotó del aviso del banco): lo completa, no anota otro
+  const [fotoPara, setFotoPara] = useState<Tx['id'] | null>(null);
+  // Los productos de la boleta por su código de barras: el mismo nombre que da el escáner del Inventario («Leche Pro 1L choc»
+  // → el nombre del envase), así entrar por boleta es igual de bueno que escanear cada uno
+  const [porCodigo, setPorCodigo] = useState<Record<string, { nombre: string; marca?: string }>>({});
+  const [buscandoCod, setBuscandoCod] = useState(false);
+  useEffect(() => {
+    if (sheet?.k !== 'boleta') return;
+    const eans = [...new Set([...sheet.leida.items, ...(sheet.leida.sinPrecio ?? [])].map((i) => i.ean).filter((e): e is string => !!e))].slice(0, 30);
+    setPorCodigo({});
+    if (!eans.length) return;
+    let vivo = true;
+    setBuscandoCod(true);
+    Promise.all(eans.map(async (e) => {
+      const r = await foodSearchService.lookupBarcode(e).catch(() => null);
+      const nombre = r?.food?.name ?? r?.nameOnly?.name;
+      const marca = r?.food?.brand ?? r?.nameOnly?.brand;
+      return nombre ? ([e, { nombre: String(nombre).slice(0, 60), ...(marca ? { marca: String(marca) } : {}) }] as const) : null;
+    })).then((xs) => {
+      if (!vivo) return;
+      setPorCodigo(Object.fromEntries(xs.filter((x): x is NonNullable<typeof x> => !!x)));
+      setBuscandoCod(false);
+    }).catch(() => { if (vivo) setBuscandoCod(false); });
+    return () => { vivo = false; };
+  }, [sheet]);
   // ¿Usa el Inventario? Entonces los productos de la boleta van a su casa (fase I3)
   const [invOn, setInvOn] = useState(false);
   const [invS, setInvS] = useState<InventoryState | null>(null);
@@ -125,6 +151,8 @@ export default function FinanceSheets({ sheet, onClose, open, S, V, act, irA, im
       case 'confirmar': setF({ monto: String(sheet.p.monto), cuenta: sheet.p.cuenta != null && E.activa(sheet.p.cuenta) ? sheet.p.cuenta : primeraDebito() }); break;
       case 'presup': setF({ monto: S.presup?.[sheet.cat] ? String(S.presup[sheet.cat]) : '' }); break;
       case 'boleta': setF({ elegidas: {}, sel: null, cuenta: last, fecha: sheet.leida.fecha ?? sheet.timbre?.fecha ?? hoy }); break;
+      // «📷 Boleta» desde la notificación de lo que Eris anotó: la cámara se abre al tiro para ese gasto
+      case 'tx': setF({}); if (sheet.foto) { setFotoPara(sheet.id); setFoto(true); } break;
       case 'efectivo': setF({ saldo: efec ? String(E.efectivo) : '' }); break;
       case 'asignar': setF({ cuenta: null }); break;
       default: setF({});
@@ -143,11 +171,12 @@ export default function FinanceSheets({ sheet, onClose, open, S, V, act, irA, im
   };
   // La FOTO de la boleta: se lee en el PC y se abre la revisión con todos los productos (o, si no se pudo, el timbre)
   const onFoto = async ({ base64, timbre }: { base64: string; timbre: Timbre | null }) => {
-    setFoto(false); setLeyendo(true);
+    const para = fotoPara;
+    setFoto(false); setFotoPara(null); setLeyendo(true);
     const r = await leerBoletaEnPC(base64);
     setLeyendo(false);
     if (!r.ok) {
-      if (timbre) { Alert.alert('Boleta', `${r.msg}
+      if (timbre && para == null) { Alert.alert('Boleta', `${r.msg}
 
 Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimbre(timbre); }
       else Alert.alert('Boleta', r.msg);
@@ -156,8 +185,16 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
     if (timbre && !esCompra(timbre)) { Alert.alert('No es una compra', `Es una ${TIPOS_DTE[timbre.tipo] ?? 'documento'}: no la anoto como gasto.`); return; }
     const ya = boletaAnotada(S.tx, claveBoletaFoto(r, timbre));
     if (ya) { Alert.alert('Ya está anotada', `Esta boleta ya está en tus movimientos: ${ya.desc}, ${clp(ya.monto)} el ${fechaCorta(ya.fecha)}.`); return; }
-    open({ k: 'boleta', leida: r, timbre });
+    // Precios sin IVA que el PC no vio pero el timbre sí (lo pagado = la suma + 19 %)
+    open({ k: 'boleta', leida: conIvaDelTimbre(r, timbre?.monto), timbre, ...(para != null ? { txId: para } : {}) });
   };
+  // La cámara y el «leyendo…» de la boleta, en las hojas que la usan
+  const camaraBoleta = (
+    <>
+      <ReceiptPhoto visible={foto} onClose={() => { setFoto(false); setFotoPara(null); }} onFoto={onFoto} />
+      {leyendo && <View style={s.leyendo}><ActivityIndicator color={FX.cyan} /><Text style={s.note}>Leyendo la boleta en el PC…</Text></View>}
+    </>
+  );
   if (!sheet) return null;
   const n = (v: unknown) => Number(v) || 0;
   /** el día del formulario: un número, o «último día hábil» */
@@ -185,8 +222,7 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
             onClose();
           }}>
           <ReceiptScanner visible={scan} onClose={() => setScan(false)} onTimbre={onTimbre} />
-          <ReceiptPhoto visible={foto} onClose={() => setFoto(false)} onFoto={onFoto} />
-          {leyendo && <View style={s.leyendo}><ActivityIndicator color={FX.cyan} /><Text style={s.note}>Leyendo la boleta en el PC…</Text></View>}
+          {camaraBoleta}
           {f.notif && <Text style={s.note}>{f.notif.fuente === 'cartola' ? `📄 De la cartola de ${f.notif.app}: «${f.notif.texto ?? ''}». Revisa la categoría.` : `🔔 Aviso de ${f.notif.app}${f.notif.texto ? `: «${f.notif.texto}»` : ''}. Revisa con qué pagaste.`}</Text>}
           {f.notif ? null : f.boleta
             ? <Text style={s.note}>🧾 Boleta folio {f.boleta.folio} · {f.boleta.comercio || f.boleta.rut}{f.boleta.item1 ? ` · 1.º ${f.boleta.item1}` : ''}. Revisa la categoría y con qué pagaste.</Text>
@@ -221,6 +257,8 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
       // La foto de la boleta ya leída en el PC (2026-10-22, pedido del usuario: «el precio total se queda en finanzas y lo
       // demás se mueve»): UN gasto con el total y su desglose por categoría (el presupuesto lo reparte), y cada producto, revisado
       // línea por línea, a su área del Inventario con su cantidad y precio.
+      // 2026-11-15: si el gasto ya está anotado (Eris lo anotó del aviso del banco), la boleta lo COMPLETA y no anota otro;
+      // cada producto se reconoce por su código de barras; lo que no se alcanzó a leer queda como «sin leer» para cuadrar.
       const { leida, timbre } = sheet;
       const cm = comercioDe(timbre?.razonSocial || leida.comercio || 'Boleta');
       const nombre = cm.comercio;
@@ -229,12 +267,29 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
       const suma = grupos.reduce((a, g) => a + g.monto, 0);
       // El total del timbre manda (es exacto); si no se leyó, el que dice la boleta
       const total = timbre?.monto ?? leida.total;
-      const cuadra = total != null && Math.abs(total - suma) <= 1;
+      // Lo que no se alcanzó a leer (un precio borroso): va como «sin leer» en la categoría del comercio, así el gasto es lo pagado
+      const sinLeer = total != null && total - suma > 1 ? total - suma : 0;
+      const sobra = total != null && suma - total > 1;
+      const cuadra = total != null && !sobra && !sinLeer;
+      const partesTodas = grupos.map((g) => ({ cat: g.cat, monto: g.monto }));
+      if (sinLeer) {
+        const g = partesTodas.find((x) => x.cat === cm.cat);
+        if (g) g.monto += sinLeer; else partesTodas.push({ cat: cm.cat, monto: sinLeer });
+        partesTodas.sort((a, b) => b.monto - a.monto);
+      }
       const clave = claveBoletaFoto(leida, timbre);
-      // Cada producto → su línea del inventario (área por el nombre o la categoría; lo que elijas manda)
-      // …y si ya lo tienes en casa («Shampoo»), se suma ahí en su unidad en vez de duplicarlo (salvo que elijas otra área)
-      const lineas = leida.items.map((it, i) => {
-        const l = lineaDeBoleta({ ...it, cat: catDe(i) });
+      // ¿Ya está anotado este gasto? (el aviso del banco, la cartola o tú por chat: mismo monto, ±1 día, sin boleta)
+      const destino: Tx | null = f.nuevo ? null : sheet.txId != null
+        ? S.tx.find((x) => x.id === sheet.txId && x.tipo === 'gasto' && !x.boleta) ?? null
+        : gastoDeLaBoleta(S, { total: total ?? suma, fecha: f.fecha });
+      const notifApp = (destino?.notif as { app?: string } | undefined)?.app;
+      // Cada producto → su línea del inventario. Con el código de barras, el nombre del envase (como el escáner) y, si ya lo
+      // tienes en casa con ese código o ese nombre («Shampoo»), se suma ahí en su unidad (salvo que elijas otra área)
+      const lineaDe = (it: { desc: string; monto: number; cant?: number; unit?: number; cat?: string; ean?: string }, i: number) => {
+        const l0 = lineaDeBoleta(it);
+        const pc = it.ean ? porCodigo[it.ean] : undefined;
+        const l = pc ? { ...l0, nombre: pc.nombre, ...(pc.marca ? { marca: pc.marca } : {}), area: l0.area ?? areaPara(pc.nombre) ?? null } : l0;
+        if (pc && !l.incluir && l.area) l.incluir = true;
         const elegida = (f.areas ?? {})[i] as AreaId | null | undefined;
         const d = invS ? destinoBoleta(invS, l) : null;
         if (d && (elegida === undefined || elegida === d.item.area)) {
@@ -242,21 +297,31 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
         }
         const area = elegida !== undefined ? elegida : l.area;
         return { ...l, area, incluir: !!area && (elegida !== undefined ? elegida != null : l.incluir), suma: null as string | null };
-      });
-      const alInv = invOn ? lineas.filter((l) => l.incluir) : [];
+      };
+      const lineas = leida.items.map((it, i) => lineaDe({ ...it, cat: catDe(i) }, i));
+      // Los que están en la boleta pero sin precio legible: van a la casa igual (la plata quedó en «sin leer»)
+      const lineasSP = (leida.sinPrecio ?? []).map((sp, j) => lineaDe({ desc: sp.desc, monto: 0, cant: sp.cant, ean: sp.ean, cat: cm.cat }, leida.items.length + j));
+      const alInv = invOn ? [...lineas, ...lineasSP].filter((l) => l.incluir) : [];
       const anotar = async (soloTotal: boolean) => {
-        const monto = soloTotal ? (total ?? suma) : suma;
+        const monto = soloTotal ? (total ?? suma) : suma + sinLeer;
+        const partes = soloTotal || partesTodas.length < 2 ? undefined : partesTodas;
+        const cat = soloTotal ? cm.cat : partesTodas[0]?.cat ?? cm.cat;
+        const folio = timbre?.folio ?? leida.folio;
+        const base = {
+          clave, comercio: timbre?.razonSocial || leida.comercio || nombre, ...(folio ? { folio } : {}), total: total ?? suma, ...(timbre?.rut || leida.rut ? { rut: timbre?.rut ?? leida.rut } : {}),
+          ...(sinLeer ? { sinLeer } : {}), ...(leida.ivaAparte ? { iva: leida.iva } : {}),
+        };
+        const items = leida.items.map((it, i) => ({ ...it, cat: catDe(i), ...(lineas[i].area ? { area: lineas[i].area } : {}), ...(it.ean && porCodigo[it.ean] ? { nombre: porCodigo[it.ean].nombre } : {}) }));
+        const nInv = alInv.length ? ` · ${alInv.length} producto${alInv.length === 1 ? '' : 's'} al inventario` : '';
         const ok = await act((W, ctx) => {
           if (boletaAnotada(W.tx, clave)) return { ok: false, msg: 'Esta boleta ya está anotada' };
-          const folio = timbre?.folio ?? leida.folio;
-          const base = { clave, comercio: timbre?.razonSocial || leida.comercio || nombre, ...(folio ? { folio } : {}), total: total ?? suma, ...(timbre?.rut || leida.rut ? { rut: timbre?.rut ?? leida.rut } : {}) };
-          const r = formGasto(W, {
-            desc: nombre, monto, cat: soloTotal ? cm.cat : grupos[0]?.cat ?? cm.cat, fecha: f.fecha, cuenta: f.cuenta, via: 'boleta',
-            ...(soloTotal || grupos.length < 2 ? {} : { partes: grupos.map((g) => ({ cat: g.cat, monto: g.monto })) }),
-            extra: { boleta: { ...base, items: leida.items.map((it, i) => ({ ...it, cat: catDe(i), ...(lineas[i].area ? { area: lineas[i].area } : {}) })) } },
-          }, ctx);
+          if (destino) {
+            const r = completarConBoleta(W, destino.id, { desc: nombre, cat, partes, boleta: { ...base, items } });
+            return r.ok ? { ok: true, msg: `Le agregué la boleta a «${r.tx?.desc ?? destino.desc}»${nInv}` } : r;
+          }
+          const r = formGasto(W, { desc: nombre, monto, cat, fecha: f.fecha, cuenta: f.cuenta, via: 'boleta', ...(partes ? { partes } : {}), extra: { boleta: { ...base, items } } }, ctx);
           if (!r.ok) return r;
-          return { ok: true, msg: `Boleta anotada: ${clp(monto)}${grupos.length > 1 && !soloTotal ? ` en ${grupos.length} categorías` : ''}${alInv.length ? ` · ${alInv.length} producto${alInv.length === 1 ? '' : 's'} al inventario` : ''}` };
+          return { ok: true, msg: `Boleta anotada: ${clp(monto)}${partes ? ` en ${partes.length} categorías` : ''}${nInv}` };
         });
         if (!ok) return;
         // Recién con el gasto anotado, los productos van a la casa (si fallara Finanzas, no se agrega nada)
@@ -270,20 +335,55 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
         onClose();
       };
       const guardar = () => {
-        if (cuadra || total == null) { void anotar(false); return; }
-        Alert.alert('No cuadra con el total', `Los productos que leí suman ${clp(suma)} y el total de la boleta es ${clp(total)}. Puede que la foto no se haya leído completa.`, [
+        if (!sobra) { void anotar(false); return; }
+        Alert.alert('Suma más que el total', `Los productos que leí suman ${clp(suma)} y el total de la boleta es ${clp(total!)}. Puede que algún precio se haya leído mal.`, [
           { text: 'Revisar', style: 'cancel' },
-          { text: `Solo el total (${clp(total)})`, onPress: () => { void anotar(true); } },
+          { text: `Solo el total (${clp(total!)})`, onPress: () => { void anotar(true); } },
           { text: 'Anotar lo leído', onPress: () => { void anotar(false); } },
         ]);
       };
-      return (
-        <Sheet visible title="BOLETA" onClose={onClose} saveLabel={alInv.length ? `Anotar y ${alInv.length} al inventario` : 'Anotar la boleta'} onSave={guardar}>
-          <Text style={s.txDesc}>{nombre}</Text>
-          <Text style={s.note}>{[leida.fecha ? fechaCorta(leida.fecha) : null, leida.hora ?? null, leida.folio ? `folio ${leida.folio}` : null, `${leida.items.length} producto${leida.items.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</Text>
-          <Text style={[s.note, { color: total == null ? FX.muted : cuadra ? FX.up : FX.gold }]}>
-            {total == null ? `Suman ${clp(suma)} (no encontré el total para cuadrar).` : cuadra ? `✓ Suman ${clp(suma)}: cuadra con el total.` : `⚠ Suman ${clp(suma)} y el total dice ${clp(total)}.`}
+      type Linea = (typeof lineas)[number];
+      const filaInv = (l: Linea, i: number, desc: string) => (invOn ? (
+        <TouchableOpacity onPress={() => set({ selA: f.selA === i ? null : i, sel: null })} style={s.invRow} accessibilityRole="button"
+          accessibilityLabel={l.incluir && l.area ? `${desc}: va a ${AREA[l.area].nombre} del inventario. Cambiar` : `${desc}: no va al inventario. Cambiar`}>
+          <Text style={[s.invText, !l.incluir && { color: FX.dim }]}>
+            {l.incluir && l.area
+              ? (l.suma
+                ? `📦 se suma a ${l.suma} (${AREA[l.area].icono} ${AREA[l.area].corto}) · +${fmtCant(l.cantidad as number, l.unidad ?? 'u')}`
+                : `📦 ${AREA[l.area].icono} ${AREA[l.area].corto} · ${l.barcode && porCodigo[l.barcode] ? `${l.nombre} · ` : ''}${fmtCant(l.cantidad as number, l.unidad ?? 'u', l.contenido)}`)
+              : '— no va al inventario'}
           </Text>
+        </TouchableOpacity>
+      ) : null);
+      const pickArea = (l: Linea, i: number) => (f.selA === i ? (
+        <View style={s.areaPick}>
+          {AREAS.map((a) => <Chip key={a.id} small label={`${a.icono} ${a.corto}`} color="#2dd4bf" on={l.incluir && l.area === a.id} onPress={() => set({ areas: { ...(f.areas ?? {}), [i]: a.id }, selA: null })} />)}
+          <Chip small label="No va al inventario" on={!l.incluir} onPress={() => set({ areas: { ...(f.areas ?? {}), [i]: null }, selA: null })} />
+        </View>
+      ) : null);
+      const nProd = leida.items.length + (leida.sinPrecio?.length ?? 0);
+      const conCodigo = leida.items.filter((it) => it.ean).length + (leida.sinPrecio ?? []).filter((x) => x.ean).length;
+      return (
+        <Sheet visible title="BOLETA" onClose={onClose} onSave={guardar}
+          saveLabel={destino ? (alInv.length ? `Completar y ${alInv.length} al inventario` : 'Completar el gasto') : alInv.length ? `Anotar y ${alInv.length} al inventario` : 'Anotar la boleta'}>
+          <Text style={s.txDesc}>{nombre}</Text>
+          <Text style={s.note}>{[leida.fecha ? fechaCorta(leida.fecha) : null, leida.hora ?? null, leida.folio ? `folio ${leida.folio}` : null, `${nProd} producto${nProd === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</Text>
+          {destino && (
+            <View style={[s.preview, { borderColor: FX.cyan }]}>
+              <Text style={[s.previewTag, { color: FX.cyan }]}>🔗 YA ESTÁ ANOTADO</Text>
+              <Text style={s.note}>{`«${destino.desc}», ${clp(destino.monto)} el ${fechaCorta(String(destino.fecha))}${notifApp ? `, del aviso de ${notifApp}` : destino.via === 'cartola' ? ', de la cartola' : ''}. No lo anoto dos veces: le agrego el detalle${invOn ? ' y lo de la casa va al inventario' : ''}.`}</Text>
+              {total != null && Math.abs(destino.monto - total) > 1 && <Text style={[s.note, { color: FX.gold }]}>{`La boleta dice ${clp(total)} y el cargo fue ${clp(destino.monto)}: queda lo que cobró el banco y el detalle se reparte en proporción.`}</Text>}
+              {sheet.txId == null && <Btn small ghost label="No, es otra compra" color={FX.muted} onPress={() => set({ nuevo: true })} style={{ alignSelf: 'flex-start' }} />}
+            </View>
+          )}
+          <Text style={[s.note, { color: total == null ? FX.muted : cuadra ? FX.up : FX.gold }]}>
+            {total == null ? `Suman ${clp(suma)} (no encontré el total para cuadrar).`
+              : cuadra ? `✓ Suman ${clp(suma)}: cuadra con el total.`
+              : sinLeer ? `⚠ Leí ${clp(suma)} de ${clp(total)}: los ${clp(sinLeer)} que faltan quedan como «sin leer» en ${catOf(cm.cat).label}.`
+              : `⚠ Suman ${clp(suma)} y el total dice ${clp(total)}.`}
+          </Text>
+          {leida.ivaAparte && <Text style={s.note}>{`🧾 Los precios venían sin IVA: le sumé el IVA (${clp(leida.iva ?? 0)}) a cada producto, para que cuadre con lo que pagaste.`}</Text>}
+          {invOn && conCodigo > 0 && <Text style={s.note}>{buscandoCod ? '▦ Buscando los productos por su código de barras…' : `▦ ${Object.keys(porCodigo).length} de ${conCodigo} reconocidos por su código de barras.`}</Text>}
           {grupos.map((g) => (
             <View key={g.cat} style={s.grupo}>
               <Text style={s.grupoT}>{catOf(g.cat).icon} {catOf(g.cat).label.toUpperCase()} · {clp(g.monto)}</Text>
@@ -293,32 +393,39 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
                   <View key={it.i}>
                     <TouchableOpacity onPress={() => set({ sel: f.sel === it.i ? null : it.i, selA: null })} style={s.itemRow} accessibilityRole="button" accessibilityLabel={`Cambiar la categoría de ${it.desc}`}>
                       <Text style={s.itemD} numberOfLines={1}>{it.desc}{it.cant && it.cant !== 1 ? ` ×${String(it.cant).replace('.', ',')}` : ''}</Text>
-                      <Text style={s.itemM}>{clp(it.monto)}{it.descuento ? ` (${clp(it.descuento)})` : ''}</Text>
+                      <Text style={[s.itemM, it.estimado ? { color: FX.gold } : null]}>{it.estimado ? '≈ ' : ''}{clp(it.monto)}{it.descuento ? ` (${clp(it.descuento)})` : ''}</Text>
                     </TouchableOpacity>
-                    {invOn && (
-                      <TouchableOpacity onPress={() => set({ selA: f.selA === it.i ? null : it.i, sel: null })} style={s.invRow} accessibilityRole="button"
-                        accessibilityLabel={l.incluir && l.area ? `${it.desc}: va a ${AREA[l.area].nombre} del inventario. Cambiar` : `${it.desc}: no va al inventario. Cambiar`}>
-                        <Text style={[s.invText, !l.incluir && { color: FX.dim }]}>{l.incluir && l.area ? (l.suma ? `📦 se suma a ${l.suma} (${AREA[l.area].icono} ${AREA[l.area].corto}) · +${fmtCant(l.cantidad as number, l.unidad ?? 'u')}` : `📦 ${AREA[l.area].icono} ${AREA[l.area].corto} · ${fmtCant(l.cantidad as number, l.unidad ?? 'u', l.contenido)}`) : '— no va al inventario'}</Text>
-                      </TouchableOpacity>
-                    )}
+                    {filaInv(l, it.i, it.desc)}
                     {f.sel === it.i && <CatPicker value={catDe(it.i)} onChange={(c) => set({ elegidas: { ...(f.elegidas ?? {}), [it.i]: c }, sel: null })} />}
-                    {f.selA === it.i && (
-                      <View style={s.areaPick}>
-                        {AREAS.map((a) => <Chip key={a.id} small label={`${a.icono} ${a.corto}`} color="#2dd4bf" on={l.incluir && l.area === a.id} onPress={() => set({ areas: { ...(f.areas ?? {}), [it.i]: a.id }, selA: null })} />)}
-                        <Chip small label="No va al inventario" on={!l.incluir} onPress={() => set({ areas: { ...(f.areas ?? {}), [it.i]: null }, selA: null })} />
-                      </View>
-                    )}
+                    {pickArea(l, it.i)}
                   </View>
                 );
               })}
             </View>
           ))}
+          {(sinLeer > 0 || lineasSP.length > 0) && (
+            <View style={s.grupo}>
+              <Text style={s.grupoT}>❔ SIN PRECIO LEÍDO{sinLeer ? ` · ${clp(sinLeer)}` : ''}</Text>
+              {(leida.sinPrecio ?? []).map((sp, j) => {
+                const i = leida.items.length + j, l = lineasSP[j];
+                return (
+                  <View key={i}>
+                    <View style={s.itemRow}><Text style={s.itemD} numberOfLines={1}>{sp.desc}{sp.cant && sp.cant !== 1 ? ` ×${sp.cant}` : ''}</Text><Text style={s.itemM}>—</Text></View>
+                    {filaInv(l, i, sp.desc)}
+                    {pickArea(l, i)}
+                  </View>
+                );
+              })}
+              {!lineasSP.length && <Text style={s.note}>Una o más líneas que no pude leer.</Text>}
+            </View>
+          )}
+          {leida.items.some((it) => it.estimado) && <Text style={s.note}>≈ = su precio no se leía: es lo que faltaba para el total.</Text>}
           {leida.dudosas.length > 0 && <Text style={[s.note, { color: FX.gold }]}>No pude leer bien: {leida.dudosas.slice(0, 3).join(' · ')}</Text>}
           <Text style={s.note}>
-            Se anota UN gasto con el total{grupos.length > 1 ? `, repartido en ${grupos.length} categorías para tu presupuesto` : ''}. Toca un producto para cambiarle la categoría{invOn ? '; toca la línea 📦 para elegir a qué área de tu casa va (o que no vaya)' : ''}.
+            {destino ? 'Sigue siendo un solo gasto' : 'Se anota UN gasto con el total'}{partesTodas.length > 1 ? `, repartido en ${partesTodas.length} categorías para tu presupuesto` : ''}. Toca un producto para cambiarle la categoría{invOn ? '; toca la línea 📦 para elegir a qué área de tu casa va (o que no vaya)' : ''}.
           </Text>
-          {pick('CON QUÉ PAGASTE', opts('gasto'), f.cuenta, (r) => set({ cuenta: r }))}
-          <FechaCampo value={f.fecha ?? ''} onChange={(v) => set({ fecha: v })} now={now} />
+          {!destino && pick('CON QUÉ PAGASTE', opts('gasto'), f.cuenta, (r) => set({ cuenta: r }))}
+          {!destino && <FechaCampo value={f.fecha ?? ''} onChange={(v) => set({ fecha: v })} now={now} />}
         </Sheet>
       );
     }
@@ -526,7 +633,14 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
         <Sheet visible title={(TIPO_LABEL[t.tipo] ?? 'Movimiento').toUpperCase()} onClose={onClose}>
           <Text style={s.txAmt}>{L.sign === '+' || L.sign === '−' ? L.sign : ''}{clp(Math.abs(t.monto))}</Text>
           <Text style={s.txDesc}>{L.icon} {t.desc}</Text>
-          <Text style={s.note}>{[fechaCorta(String(t.fecha)), t.tipo === 'gasto' ? catOf(t.cat).label : null, cuenta, Number(t.cuotas) > 1 ? `en ${t.cuotas} cuotas` : null, t.via === 'eris' ? 'anotado por chat' : null, t.via === 'boleta' ? `boleta folio ${(t.boleta as any)?.folio ?? ''}` : null, t.via === 'banco' ? `${t.auto ? '🤖 lo anotó Eris del ' : ''}aviso de ${(t.notif as any)?.app ?? 'tu banco'}` : null, t.via === 'cartola' ? 'de la cartola' : null].filter(Boolean).join(' · ')}</Text>
+          <Text style={s.note}>{[fechaCorta(String(t.fecha)), t.tipo === 'gasto' ? catOf(t.cat).label : null, cuenta, Number(t.cuotas) > 1 ? `en ${t.cuotas} cuotas` : null, t.via === 'eris' ? 'anotado por chat' : null, t.via === 'boleta' ? `boleta folio ${(t.boleta as any)?.folio ?? ''}` : t.boleta ? '🧾 con boleta' : null, t.via === 'banco' ? `${t.auto ? '🤖 lo anotó Eris del ' : ''}aviso de ${(t.notif as any)?.app ?? 'tu banco'}` : null, t.via === 'cartola' ? 'de la cartola' : null].filter(Boolean).join(' · ')}</Text>
+          {/* La boleta de un gasto ya anotado (el que Eris anotó del aviso del banco): qué compraste y lo de la casa al inventario */}
+          {t.tipo === 'gasto' && !t.boleta && (
+            <>
+              {camaraBoleta}
+              {!leyendo && <Btn small ghost label="🧾 Agregar la boleta (qué compraste)" color={FX.cyan} style={{ alignSelf: 'flex-start' }} onPress={() => { setFotoPara(t.id); setFoto(true); }} />}
+            </>
+          )}
           {/* Un gasto se corrige acá: la categoría y con qué pagaste (lo que Eris anotó sola de un aviso, sobre todo) */}
           {t.tipo === 'gasto' && (
             <>

@@ -16,10 +16,12 @@ export type SheetState =
   | { k: 'cuenta' } | { k: 'ahorro' } | { k: 'prestamo' } | { k: 'sueldo' } | { k: 'meta' }
   | { k: 'prog'; tipo: 'gasto' | 'ingreso' }
   | { k: 'confirmar'; p: Prog & { fecha: string } }
-  | { k: 'tx'; id: Tx['id'] }
+  /** `foto`: la cámara de la boleta se abre al tiro (el «🧾 Boleta» de la notificación de lo que Eris anotó) */
+  | { k: 'tx'; id: Tx['id']; foto?: boolean }
   | { k: 'presup'; cat: string }
   /** la foto de la boleta ya leída: revisar y anotar todo de una vez (un gasto por categoría) */
-  | { k: 'boleta'; leida: BoletaFoto; timbre: Timbre | null }
+  /** `txId`: la boleta completa ese gasto ya anotado (no anota otro) */
+  | { k: 'boleta'; leida: BoletaFoto; timbre: Timbre | null; txId?: Tx['id'] }
   /** el botón +: todo lo que se puede anotar, en un solo lugar */
   | { k: 'menu' }
   /** importar la cartola: elegir la cuenta */

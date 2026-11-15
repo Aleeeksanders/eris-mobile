@@ -77,7 +77,13 @@ export default function ReceiptPhoto({ visible, onClose, onFoto }: { visible: bo
         <View style={s.footer}>
           {timbre
             ? <Text style={s.ok}>✓ Timbre leído: total {clp(timbre.monto)}</Text>
-            : <Text style={s.hint}>Que se vea entera, derecha y con buena luz. Si es muy larga, aléjate un poco.</Text>}
+            : (
+              <>
+                <Text style={s.hint}>Derecha, con buena luz y de cerca: desde arriba hasta el TOTAL y la fecha.</Text>
+                {/* 2026-11-15, pedido del usuario: que se entienda qué sirve. El código de barras de abajo de la boleta no hace falta */}
+                <Text style={s.hint2}>Si tu boleta trae un número largo al comienzo de cada producto (su código de barras), que se vea: así reconozco cada producto como si lo escanearas. Si no lo trae, igual la desgloso.</Text>
+              </>
+            )}
           {error && <Text style={s.err}>{error}</Text>}
           <TouchableOpacity style={[s.shutter, sacando && { opacity: 0.5 }]} onPress={sacar} disabled={sacando} accessibilityRole="button" accessibilityLabel="Sacar la foto">
             {sacando ? <ActivityIndicator color="#000" /> : <View style={s.shutterIn} />}
@@ -111,6 +117,7 @@ const s = StyleSheet.create({
   title: { color: '#fff', fontFamily: FX.mono, fontSize: 13, letterSpacing: 2, fontWeight: '700' },
   footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 20, paddingBottom: 40, gap: 12, alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.45)' },
   hint: { color: '#fff', fontSize: 13, lineHeight: 19, textAlign: 'center' },
+  hint2: { color: 'rgba(255,255,255,0.75)', fontSize: 12, lineHeight: 17, textAlign: 'center' },
   ok: { color: FX.up, fontSize: 13, fontWeight: '700', textAlign: 'center' },
   err: { color: FX.gold, fontSize: 13, textAlign: 'center' },
   shutter: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: 'rgba(255,255,255,0.4)' },

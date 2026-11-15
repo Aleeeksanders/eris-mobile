@@ -1033,7 +1033,7 @@ export interface LineaBoleta extends Entrada { incluir: boolean }
  * la cantidad («2 X 1.290» → 2; «0,532 X 2.990» → 0,532 kg), lo que trae («1L» → 1 L), el área (por el nombre o la
  * categoría) y el precio total. `incluir`: falso para la bolsa, el despacho o lo que no tiene área.
  */
-export function lineaDeBoleta(it: { desc: string; monto: number; cant?: number; unit?: number; cat?: string }): LineaBoleta {
+export function lineaDeBoleta(it: { desc: string; monto: number; cant?: number; unit?: number; cat?: string; ean?: string }): LineaBoleta {
   const desc = String(it.desc || '').replace(/\s+/g, ' ').trim();
   const largo = expandirAbreviaturas(desc.toLowerCase());
   const nombre = largo ? largo[0].toUpperCase() + largo.slice(1) : 'Producto';
@@ -1046,8 +1046,11 @@ export function lineaDeBoleta(it: { desc: string; monto: number; cant?: number; 
     unidad: fraccion ? 'kg' : 'u',
     contenido: !fraccion && cont ? cont : null,
     precioTotal: it.monto > 0 ? it.monto : null,
+    // el código de barras de la boleta: la próxima boleta (o el escáner) reconoce el producto al tiro
+    ...(it.ean ? { barcode: it.ean } : {}),
     via: 'boleta',
-    incluir: !!area && !NO_INVENTARIO.test(fold(desc)) && it.monto > 0,
+    // sin precio legible igual va (el producto está en la boleta); lo que no se compra (bolsa, despacho), no
+    incluir: !!area && !NO_INVENTARIO.test(fold(desc)) && (it.monto > 0 || !!it.ean),
   };
 }
 
@@ -1067,8 +1070,10 @@ export function expandirAbreviaturas(s: string): string {
  * ¿Es algo que ya tienes? (la boleta dice «Shampoo sedal 340ml» y tienes «Shampoo»; «0,532 kg de palta» y cuentas paltas):
  * se suma ahí, en su unidad, en vez de duplicarlo. null = es nuevo (o no se puede convertir con seguridad).
  */
-export function destinoBoleta(S: InventoryState, l: Pick<Entrada, 'nombre' | 'cantidad' | 'unidad' | 'contenido'>): { item: Item; cantidad: number; unidad: Unidad } | null {
-  const it = S.items.map((i) => ({ i, p: puntaje(i, l.nombre) })).filter((x) => x.p >= 70).sort((a, b) => b.p - a.p)[0]?.i;
+export function destinoBoleta(S: InventoryState, l: Pick<Entrada, 'nombre' | 'cantidad' | 'unidad' | 'contenido' | 'barcode'>): { item: Item; cantidad: number; unidad: Unidad } | null {
+  // El mismo código de barras es el mismo producto (aunque la boleta lo abrevie distinto); si no, el nombre que se parece
+  const it = (l.barcode ? S.items.find((i) => i.barcode === l.barcode) : undefined)
+    ?? S.items.map((i) => ({ i, p: puntaje(i, l.nombre) })).filter((x) => x.p >= 70).sort((a, b) => b.p - a.p)[0]?.i;
   if (!it) return null;
   const cant = Number(l.cantidad) || 1, un: Unidad = l.unidad ?? 'u';
   let q = convertir(it, cant, un);

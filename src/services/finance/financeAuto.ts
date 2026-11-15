@@ -45,6 +45,8 @@ export interface AutoEntry {
   como?: Como | 'unir';
   /** cómo se cuenta ahora («Comida», «Entre tus cuentas», «Abono»…) y la notificación */
   etiqueta?: string; titulo?: string; cuerpo?: string;
+  /** ya le agregaste la boleta (solo en la vista) */
+  conBoleta?: boolean;
   /** el aviso tal cual: si se deshace, vuelve a «Por confirmar» (y la otra mitad, si eran dos) */
   p: Propuesta; q?: Propuesta;
   /** lo que había antes de unir las dos mitades (deshacer lo deja como estaba) */
@@ -79,6 +81,7 @@ function vigilados(): string[] {
 }
 
 let pendingOpen: Tx['id'] | null = null;
+let pendingFoto = false;
 
 export const financeAuto = {
   getConfig: readCfg,
@@ -291,13 +294,15 @@ export const financeAuto = {
       return { ...e, desc: t.desc, monto: t.monto, cat: String(t.cat ?? e.cat), cuenta: ref, cuentaNombre: nombre, etiqueta: etiquetaTx(t, S),
         // el tipo de AHORA (si lo cambiaste a ingreso, ya no ofrece «Fue un ingreso»)
         como: t.tipo === 'abono' ? 'abono' : t.tipo === 'ingreso' && e.como === 'abono' ? 'ingreso' : e.como,
-        last4: ref === e.cuenta ? e.last4 : undefined };
+        last4: ref === e.cuenta ? e.last4 : undefined, conBoleta: !!t.boleta };
     }).reverse();
   },
 
   /** «Cambiar» desde la notificación: Finanzas abre ese movimiento apenas esté lista */
-  openTx: (id: Tx['id']) => { pendingOpen = id; DeviceEventEmitter.emit(FINANCE_OPEN_TX_EVENT, id); },
+  openTx: (id: Tx['id'], o?: { foto?: boolean }) => { pendingOpen = id; pendingFoto = !!o?.foto; DeviceEventEmitter.emit(FINANCE_OPEN_TX_EVENT, id); },
   takePendingOpen: (): Tx['id'] | null => { const x = pendingOpen; pendingOpen = null; return x; },
+  /** ¿Se abrió con «🧾 Boleta»? (la cámara de la boleta al tiro) — se lee una vez */
+  takePendingFoto: (): boolean => { const x = pendingFoto; pendingFoto = false; return x; },
 };
 
 /** Avisos nuevos → «Por confirmar» en orden → el cuadre con el banco (con visto bueno: avisa una vez al día por cuenta) */
