@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Hestia Manos (K0): la app aparte que le da a Hestia las manos en el teléfono. Solo se ve si está instalada; Eris se enlaza
+       a su servicio y le pasa los pedidos del servidor. Sin ella, Eris no anuncia «telefono_ops» y nada de esto existe. -->
+  <queries>
+    <package android:name="com.aleeeksanders.hestiamanos" />
+  </queries>
+</manifest>

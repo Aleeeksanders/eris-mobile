@@ -127,7 +127,9 @@ class BubbleService : Service() {
       .setSmallIcon(R.drawable.ic_stat_eris)
       .setColor(if (BubbleBridge.persona == "hestia") 0xFFF59E0B.toInt() else 0xFF34D399.toInt()) // núcleo: menta Eris / brasa Hestia
       .setContentTitle("${personaName()} sigue activa")
-      .setContentText("En segundo plano, como burbuja. Tócala para volver al chat; arrástrala a la ✕ para cerrarla.")
+      .setContentText(
+        if (BubbleBridge.persona == "hestia") "En segundo plano, como burbuja. Tócala para volver al chat; mantenla presionada para llamar a Hestia; arrástrala a la ✕ para cerrarla."
+        else "En segundo plano, como burbuja. Tócala para volver al chat; arrástrala a la ✕ para cerrarla.")
       .setOngoing(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -244,6 +246,16 @@ class BubbleService : Service() {
     private var dragging = false
     private var velocity: VelocityTracker? = null
     private val slop = ViewConfiguration.get(this@BubbleService).scaledTouchSlop
+    // J3: mantenerla presionada (sin moverla) con Hestia en la burbuja abre la llamada de voz
+    private var largo = false
+    private var vista: View? = null
+    private val alMantener = Runnable {
+      if (dragging || BubbleBridge.persona != "hestia") return@Runnable
+      largo = true
+      vista?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+      vista?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(120)?.start()
+      openEris(llamada = true)
+    }
 
     override fun onTouch(v: View, e: MotionEvent): Boolean {
       val lp = params ?: return false
@@ -253,12 +265,16 @@ class BubbleService : Service() {
           velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(e) }
           downX = e.rawX; downY = e.rawY; startX = lp.x.toFloat(); startY = lp.y.toFloat(); dragging = false
           v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(90).start()
+          largo = false; vista = v
+          v.removeCallbacks(alMantener)
+          if (BubbleBridge.persona == "hestia") v.postDelayed(alMantener, ViewConfiguration.getLongPressTimeout().toLong() + 150)
         }
         MotionEvent.ACTION_MOVE -> {
           velocity?.addMovement(e)
           if (!dragging && hypot(e.rawX - downX, e.rawY - downY) > slop) {
             // Sin salto: el arrastre empieza desde donde está el dedo ahora, no desde el toque inicial
             dragging = true
+            v.removeCallbacks(alMantener)
             downX = e.rawX; downY = e.rawY; startX = lp.x.toFloat(); startY = lp.y.toFloat()
             v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
             showTarget()
@@ -280,8 +296,10 @@ class BubbleService : Service() {
           val vx = velocity?.xVelocity ?: 0f
           val vy = velocity?.yVelocity ?: 0f
           velocity?.recycle(); velocity = null
+          v.removeCallbacks(alMantener)
           v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
           when {
+            largo -> {} // ya abrió la llamada
             !dragging && e.actionMasked == MotionEvent.ACTION_UP -> openEris()
             dragging && magnetized -> closeByUser()
             dragging -> settle(vx, vy)
@@ -330,11 +348,13 @@ class BubbleService : Service() {
     springX = null; springY = null
   }
 
-  private fun openEris() {
+  private fun openEris(llamada: Boolean = false) {
     BubbleBridge.pendingOpen = true
+    if (llamada) BubbleBridge.pendingCall = true
     val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
       putExtra("eris_open_chat", true)
+      if (llamada) putExtra("hestia_llamada", true)
     } ?: return
     try { startActivity(intent) } catch (_: Throwable) {}
     BubbleBridge.emit("onBubbleTap")

@@ -14,7 +14,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthStorage } from './src/services/AuthStorage';
-import { wsManager } from './src/services/WebSocketManager';
+import { wsManager, setCapsExtra } from './src/services/WebSocketManager';
 import { metricsService } from './src/services/MetricsService';
 import { nutritionBackend } from './src/services/NutritionBackend';
 import { proactiveService } from './src/services/ProactiveService';
@@ -51,6 +51,9 @@ import { ErisFAB, getErisBubbleCenter, BUBBLE_SIZE } from './src/components/Eris
 import { preloadModuleHtml } from './src/services/ModuleHtml';
 import { tintForTab } from './src/config/moduleTheme';
 import { ErisBubble } from './modules/eris-bubble';
+import { HestiaManos } from './modules/hestia-manos';
+// Hestia Manos (K0): con la app aparte instalada, Eris anuncia que puede hacer cosas en el teléfono (se revisa en cada conexión)
+setCapsExtra(() => (HestiaManos.disponible() ? ['telefono_ops'] : []));
 import { ApprovalHost } from './src/components/ApprovalHost';
 import { evaluateFromSnapshot } from './src/services/NutritionQuality';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -395,6 +398,20 @@ export default function App() {
           .catch((e) => ({ ok: false, code: 'error', msg: `Inventario no pudo: ${String(e?.message ?? e)}` }))
           .then((result) => { wsManager.sendMessage({ type: 'inventory_op_result', requestId: data.requestId, result }); });
       }
+      // Hestia Manos (K0): lo que Hestia hace en el teléfono (alarma, linterna, abrir una app…) lo hace la app aparte;
+      // acá solo se reenvía y vuelve el resultado real. Las aprobaciones ya las pidió el servidor.
+      if (data.type === 'telefono_op' && data.requestId) {
+        HestiaManos.pedir(data.op).then((result) => {
+          wsManager.sendMessage({ type: 'telefono_op_result', requestId: data.requestId, result });
+        });
+      }
+      // …y al conectar, las apps que se pueden abrir por su nombre («abre Spotify» va al teléfono si la app está acá)
+      if (data.type === 'connected' && HestiaManos.disponible()) {
+        HestiaManos.pedir({ accion: 'apps' }).then((r) => {
+          const apps = Array.isArray(r?.data?.apps) ? r.data.apps.map((a: any) => String(a?.etiqueta ?? '')).filter(Boolean) : [];
+          if (r.ok) wsManager.sendMessage({ type: 'telefono_apps', apps: apps.slice(0, 300) });
+        });
+      }
       // …y con «Mis suplementos» (SupplementBridge): «me tomé la creatina», «¿me tomé la vitamina D?»
       if (data.type === 'supplement_op' && data.requestId) {
         supplementStore.apply(data.op)
@@ -721,7 +738,11 @@ export default function App() {
     ensureService();
     ErisBubble.setAppForeground(AppState.currentState === 'active');
     const openIfTapped = () => {
-      if (authed && ErisBubble.consumePendingOpen() && !erisOpenRef.current) setTimeout(() => openEris(), 250);
+      // J3: mantener presionada la burbuja de Hestia abre la llamada (el chat la abre si está en Modo AXS)
+      const llamar = ErisBubble.consumePendingCall();
+      const abrir = ErisBubble.consumePendingOpen() || llamar;
+      if (authed && abrir && !erisOpenRef.current) setTimeout(() => openEris(), 250);
+      if (authed && llamar) setTimeout(() => DeviceEventEmitter.emit('HESTIA_LLAMAR'), 700);
     };
     openIfTapped();
     const sub = AppState.addEventListener('change', (st) => {

@@ -21,7 +21,15 @@ interface ApprovalReq {
   risk: 'normal' | 'high';
   flags: string[];
   expiresAt: number;
+  /** En una llamada con Hestia (J2): voz = también se aprueba diciendo «sí»; tarjeta / nunca_voz = solo tocando */
+  voz?: 'voz' | 'tarjeta' | 'nunca_voz';
 }
+
+const AVISO_VOZ: Record<NonNullable<ApprovalReq['voz']>, string> = {
+  voz: 'En la llamada también puedes decir «sí» o «no».',
+  tarjeta: 'En la llamada, esta se aprueba tocando.',
+  nunca_voz: 'Esto no se aprueba por voz: solo tocando.',
+};
 
 const MONO = Platform.select({ android: 'monospace', ios: 'Menlo', default: 'monospace' });
 
@@ -45,6 +53,7 @@ export function ApprovalHost() {
           risk: data.risk === 'high' ? 'high' : 'normal',
           flags: Array.isArray(data.flags) ? data.flags.map(String) : [],
           expiresAt: Date.now() + (Number(data.ttlMs) || 180000),
+          voz: data.voz === 'voz' || data.voz === 'tarjeta' || data.voz === 'nunca_voz' ? data.voz : undefined,
         };
         setQueue((q) => (q.some((r) => r.id === req.id) ? q : [...q, req]));
         Vibration.vibrate(req.risk === 'high' ? [0, 250, 120, 250] : [0, 200]);
@@ -107,6 +116,7 @@ export function ApprovalHost() {
             {queue.length > 1 && <Text style={s.counter}>1 de {queue.length}</Text>}
           </View>
           <Text style={s.title}>{current.title}</Text>
+          {current.voz && <Text style={[s.flagsLine, { color: current.voz === 'voz' ? T.accent : T.textMuted }]}>{AVISO_VOZ[current.voz]}</Text>}
 
           {high && (
             <View style={s.riskBox}>

@@ -65,6 +65,14 @@
       "./plugins/withNFCManifest.js",
       "./plugins/withForegroundServiceManifest.js",
       [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Hestia usa el micrófono para conversar contigo por voz.",
+          "speechRecognitionPermission": "Hestia reconoce tu voz en el teléfono para conversar contigo.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox", "com.google.android.tts", "com.google.android.as"]
+        }
+      ],
+      [
         "@react-native-google-signin/google-signin",
         {
           "iosUrlScheme": "com.googleusercontent.apps.860030727214-nqc6sm8o3v1fl5d2l2h63932an47r6dv"

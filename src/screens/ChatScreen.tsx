@@ -22,6 +22,7 @@ import { tablesToLists, friendlyThinking } from '../utils/chatFormat';
 import ChatStarters, { placeholderExamples } from '../components/ChatStarters';
 import { AuthStorage } from '../services/AuthStorage';
 import { ModuleStorage } from '../services/ModuleStorage';
+import HestiaLlamada from './HestiaLlamada';
 
 type Mode = 'auto' | 'flash' | 'deep';
 
@@ -63,6 +64,15 @@ function SpeakerIcon({ on, color = T.text, size = 18 }: { on: boolean; color?: s
           <Line x1="16" x2="22" y1="9" y2="15" stroke={color} strokeWidth={2} strokeLinecap="round" />
         </>
       )}
+    </Svg>
+  );
+}
+
+// Llamar a Hestia por voz (J1, 2026-11-16): un teléfono dibujado, por lo mismo que SpeakerIcon
+function PhoneIcon({ color = T.text, size = 18 }: { color?: string; size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
@@ -272,6 +282,17 @@ export default function ChatScreen({
   const [activeSession, setActiveSession] = useState('');
   const [role, setRole] = useState<string>('eris');
   const isAdmin = role === 'ikaros';
+  // Hestia por voz (J1): la llamada a pantalla completa
+  const [llamada, setLlamada] = useState(false);
+  // J3: mantener presionada la burbuja de Hestia (fuera de la app) llama, si está en Modo AXS
+  const llamarRef = useRef({ axsMode, isAdmin });
+  llamarRef.current = { axsMode, isAdmin };
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('HESTIA_LLAMAR', () => {
+      if (llamarRef.current.axsMode && llamarRef.current.isAdmin) setLlamada(true);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Ejemplos del chat vacío y del cuadro de texto: solo de los módulos que usa (paso 4 del plan para hacerla digerible)
   const [usedModules, setUsedModules] = useState({ finanzas: false, toji: false });
@@ -658,6 +679,12 @@ export default function ChatScreen({
               {mode === 'auto' ? '🔮 AUTO' : mode === 'flash' ? '⚡ FLASH' : '🧠 DEEP'}
             </Text>
           </View>
+          {/* Hestia por voz: solo en el Modo AXS Executive y para el rol ikaros (J1) */}
+          {axsMode && isAdmin && (
+            <TouchableOpacity onPress={() => setLlamada(true)} style={s.ttsBtn} accessibilityRole="button" accessibilityLabel="Llamar a Hestia por voz">
+              <PhoneIcon color={T.accent} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={toggleTts} style={s.ttsBtn}>
             <SpeakerIcon on={ttsEnabled} color={ttsEnabled ? T.accent : T.textMuted} />
           </TouchableOpacity>
@@ -1086,6 +1113,9 @@ export default function ChatScreen({
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Hestia por voz (J1): la llamada; solo se monta mientras está abierta */}
+      {llamada && <HestiaLlamada visible onClose={() => setLlamada(false)} />}
     </View>
   );
 }

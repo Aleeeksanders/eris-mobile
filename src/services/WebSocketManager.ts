@@ -6,6 +6,11 @@ import { AuthStorage } from "./AuthStorage";
 // 'finance_ops' = sabe aplicar en Finanzas lo que Eris anota por chat (FinanceBridge + FinanceHeadlessHost).
 // 'inventory_ops' = sabe aplicar en el Inventario lo que Eris anota por chat (inventoryStore, 2026-10-22).
 const CLIENT_CAPS = ['approvals', 'finance_ops', 'inventory_ops', 'supplement_ops'];
+// 'telefono_ops' (Hestia Manos, K0) = puede hacer cosas en el teléfono: solo si la app aparte está instalada y firmada igual.
+// Lo decide App.tsx (setCapsExtra) para que este archivo no dependa de módulos nativos (las pruebas lo cargan fuera del teléfono).
+let capsExtra: () => string[] = () => [];
+export function setCapsExtra(f: () => string[]) { capsExtra = f; }
+const clientCaps = () => { try { return [...CLIENT_CAPS, ...capsExtra()]; } catch { return CLIENT_CAPS; } };
 // Tope para abrir una conexión antes de probar la otra ruta (Tailscale ↔ WiFi de la casa)
 const CONNECT_TIMEOUT_MS = 5000;
 
@@ -137,9 +142,9 @@ class WebSocketManager {
           // Interceptar petición de autenticación
           if (data.type === 'auth_required') {
             if (this.auth.google) {
-              this.state.ws?.send(JSON.stringify({ type: 'auth_google', ...this.auth.google, caps: CLIENT_CAPS }));
+              this.state.ws?.send(JSON.stringify({ type: 'auth_google', ...this.auth.google, caps: clientCaps() }));
             } else if (this.auth.session) {
-              this.state.ws?.send(JSON.stringify({ type: 'auth_session', token: this.auth.session, caps: CLIENT_CAPS }));
+              this.state.ws?.send(JSON.stringify({ type: 'auth_session', token: this.auth.session, caps: clientCaps() }));
             } else {
               // Sin sesión ni Google: hay que iniciar sesión (la UI muestra el botón de Google)
               this.messageHandlers.forEach(handler => handler({ type: 'auth_error', code: 'login_required', message: 'Inicia sesión con Google.' }));

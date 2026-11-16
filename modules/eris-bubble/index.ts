@@ -18,7 +18,10 @@ type Native = {
   setState(state: BubbleState): void;
   setPersona?(persona: string): void;
   consumePendingOpen(): boolean;
-  addListener(event: 'onBubbleTap' | 'onBubbleClosed', cb: () => void): { remove(): void };
+  consumePendingCall?(): boolean;
+  startCall?(): boolean;
+  stopCall?(): void;
+  addListener(event: 'onBubbleTap' | 'onBubbleClosed' | 'onCallHangup', cb: () => void): { remove(): void };
 };
 
 const native: Native | null = Platform.OS === 'android' ? requireOptionalNativeModule<Native>('ErisBubble') : null;
@@ -39,5 +42,12 @@ export const ErisBubble = {
   /** Modo burbuja listo para usarse: encendido (por defecto sí) y con el permiso "Mostrar sobre otras apps". */
   isActive: () => { try { return !!native && native.isEnabled() && native.canDrawOverlays(); } catch { return false; } },
   consumePendingOpen: () => { try { return native?.consumePendingOpen() ?? false; } catch { return false; } },
+  /** J3: se mantuvo presionada la burbuja de Hestia (una sola vez true): abrir la llamada. */
+  consumePendingCall: () => { try { return native?.consumePendingCall?.() ?? false; } catch { return false; } },
+  /** J3: la llamada sigue con la pantalla apagada (servicio de micrófono). Llamarlo con la llamada a la vista. */
+  startCall: () => { try { return native?.startCall?.() ?? false; } catch { return false; } },
+  stopCall: () => { try { native?.stopCall?.(); } catch {} },
+  /** «Colgar» desde la notificación de la llamada */
+  onCallHangup: (cb: () => void) => { try { return native?.addListener('onCallHangup', cb) ?? { remove() {} }; } catch { return { remove() {} }; } },
   onClosed: (cb: () => void) => { try { return native?.addListener('onBubbleClosed', cb) ?? { remove() {} }; } catch { return { remove() {} }; } },
 };

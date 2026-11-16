@@ -23,7 +23,7 @@ class ErisBubbleModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ErisBubble")
 
-    Events("onBubbleTap", "onBubbleClosed")
+    Events("onBubbleTap", "onBubbleClosed", "onCallHangup")
 
     OnCreate {
       BubbleBridge.listener = { event -> sendEvent(event, emptyMap<String, Any>()) }
@@ -94,6 +94,26 @@ class ErisBubbleModule : Module() {
       val v = BubbleBridge.pendingOpen
       BubbleBridge.pendingOpen = false
       v
+    }
+
+    /** J3: true una sola vez después de mantener presionada la burbuja de Hestia: JS abre la llamada. */
+    Function("consumePendingCall") {
+      val v = BubbleBridge.pendingCall
+      BubbleBridge.pendingCall = false
+      v
+    }
+
+    /**
+     * J3: la llamada con Hestia sigue con la pantalla apagada (servicio en primer plano de micrófono). Se llama con la pantalla
+     * de la llamada a la vista (Android no deja iniciarlo desde segundo plano). false = Android no lo permitió.
+     */
+    Function("startCall") {
+      LlamadaService.iniciar(context)
+    }
+
+    Function("stopCall") {
+      LlamadaService.detener(context)
+      Unit
     }
 
     /** El ícono animado de Eris para dentro de la app (ver ErisMarkView / ErisMarkDrawer). */

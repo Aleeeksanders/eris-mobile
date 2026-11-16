@@ -13,6 +13,9 @@ object BubbleBridge {
   /** Se tocó la burbuja: al volver la app, JS abre el chat de Eris (ver consumePendingOpen). */
   @Volatile var pendingOpen: Boolean = false
 
+  /** J3: se mantuvo presionada la burbuja de Hestia: al volver la app, JS abre la llamada (ver consumePendingCall). */
+  @Volatile var pendingCall: Boolean = false
+
   /** Posición que tenía la burbuja de dentro de la app (centro, en dp), para que la del sistema aparezca en el mismo lugar. */
   @Volatile var handoffCenterDp: Pair<Float, Float>? = null
 

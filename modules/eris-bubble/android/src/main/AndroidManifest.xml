@@ -4,6 +4,9 @@
   <!-- Android exige un servicio en primer plano (con notificación) para mantener la burbuja viva fuera de la app -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <!-- Hestia por voz (J3): la llamada sigue con la pantalla apagada (micrófono + lo que dice Hestia) -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
   <application>
     <service
@@ -14,5 +17,9 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="Burbuja flotante de acceso rápido a la asistente Eris, visible sobre otras apps mientras el usuario la mantenga activa" />
     </service>
+    <service
+      android:name="expo.modules.erisbubble.LlamadaService"
+      android:exported="false"
+      android:foregroundServiceType="microphone|mediaPlayback" />
   </application>
 </manifest>
