@@ -1,8 +1,11 @@
 package expo.modules.hestiamanos
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -14,6 +17,8 @@ import android.os.Messenger
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -69,12 +74,95 @@ class HestiaManosModule : Module() {
 
   private fun falla(code: String, msg: String) = """{"ok":false,"code":"$code","msg":"$msg"}"""
 
+  /** Manda un Message al servicio (o lo deja en cola mientras se enlaza). false = no hubo cómo. */
+  private fun mandar(m: Message): Boolean {
+    val s = servicio
+    if (s != null) {
+      try { s.send(m); return true } catch (_: Throwable) { servicio = null }
+    }
+    enCola.add(m)
+    if (!enlazar()) { enCola.remove(m); return false }
+    return true
+  }
+
+  /** K3: un aviso sin esperar respuesta (la clave para abrir la llamada, que empezó o terminó una llamada) */
+  private fun avisar(op: JSONObject) {
+    main.post {
+      if (!mismaFirma()) return@post
+      mandar(Message.obtain().apply {
+        data = Bundle().apply { putString("id", UUID.randomUUID().toString()); putString("op", op.toString()) }
+        replyTo = respuestas
+      })
+    }
+  }
+
+  /** K3: desbloqueaste el teléfono (con la llamada abierta sobre el bloqueo, Hestia ya puede todo) */
+  private val alDesbloquear = object : BroadcastReceiver() {
+    override fun onReceive(c: Context?, i: Intent?) { try { sendEvent("onDesbloqueo", mapOf<String, Any>()) } catch (_: Throwable) {} }
+  }
+  private var escuchandoDesbloqueo = false
+
   override fun definition() = ModuleDefinition {
     Name("HestiaManos")
 
+    // K3: la llamada abierta desde Hestia Manos (botón del asistente, ajustes rápidos, atajo) y el desbloqueo durante la llamada
+    Events("onDespertar", "onDesbloqueo")
+
+    OnCreate {
+      DespertarEris.oyente = { p -> try { sendEvent("onDespertar", mapOf("origen" to p.origen, "bloqueado" to p.bloqueado)) } catch (_: Throwable) {} }
+      try {
+        ContextCompat.registerReceiver(context, alDesbloquear, IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_NOT_EXPORTED)
+        escuchandoDesbloqueo = true
+      } catch (_: Throwable) {}
+      // La clave para que Hestia Manos pueda abrir la llamada (cada vez que Eris parte: si reinstalaste Hestia Manos, se re-enlaza)
+      try { avisar(JSONObject().put("accion", "despertar_enlazar").put("token", DespertarEris.token(context))) } catch (_: Throwable) {}
+    }
+
     OnDestroy {
+      DespertarEris.oyente = null
+      if (escuchandoDesbloqueo) try { context.unregisterReceiver(alDesbloquear) } catch (_: Throwable) {}
+      escuchandoDesbloqueo = false
       try { if (servicio != null || enlazando) context.unbindService(conexion) } catch (_: Throwable) {}
       servicio = null
+    }
+
+    /** K3: la apertura pendiente desde Hestia Manos ({origen, bloqueado}), una sola vez; null si no hay */
+    Function("consumirDespertar") {
+      val act = appContext.currentActivity ?: DespertarEris.actividad()
+      val p = DespertarEris.tomar() ?: run { DespertarEris.revisar(act, act?.intent); DespertarEris.tomar() }
+      p?.let { mapOf("origen" to it.origen, "bloqueado" to it.bloqueado) }
+    }
+
+    /** K3: ¿el teléfono está bloqueado? */
+    Function("bloqueado") {
+      (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
+    }
+
+    /** K3: mostrar (o no) Eris sobre la pantalla de bloqueo. Solo durante la llamada; al colgar, siempre false. */
+    Function("sobreBloqueo") { on: Boolean ->
+      DespertarEris.mostrarSobreBloqueo(appContext.currentActivity ?: DespertarEris.actividad(), on)
+    }
+
+    /** K3: pide desbloquear (huella, cara o PIN: lo haces tú, en la pantalla de Android). true = desbloqueaste. */
+    AsyncFunction("pedirDesbloqueo") { promise: Promise ->
+      val act = appContext.currentActivity ?: DespertarEris.actividad()
+      if (act == null) { promise.resolve(false); return@AsyncFunction }
+      act.runOnUiThread {
+        val km = act.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!km.isKeyguardLocked) { promise.resolve(true); return@runOnUiThread }
+        try {
+          km.requestDismissKeyguard(act, object : KeyguardManager.KeyguardDismissCallback() {
+            override fun onDismissSucceeded() { promise.resolve(true) }
+            override fun onDismissCancelled() { promise.resolve(false) }
+            override fun onDismissError() { promise.resolve(false) }
+          })
+        } catch (_: Throwable) { promise.resolve(false) }
+      }
+    }
+
+    /** K3: avisa a Hestia Manos que una llamada empezó o terminó (para la palabra «Hestia», después: soltar el micrófono) */
+    Function("avisarLlamada") { estado: String ->
+      avisar(JSONObject().put("accion", "llamada").put("estado", if (estado == "inicio") "inicio" else "fin"))
     }
 
     /** ¿Está Hestia Manos instalada y firmada con la misma llave que Eris? */
@@ -91,13 +179,7 @@ class HestiaManosModule : Module() {
         }
         esperando[id] = promise
         main.postDelayed({ esperando.remove(id)?.resolve(falla("timeout", "Hestia Manos no respondió a tiempo.")) }, ESPERA_MS)
-        val s = servicio
-        if (s != null) {
-          try { s.send(m) } catch (_: Throwable) { servicio = null; enCola.add(m); enlazar() }
-        } else {
-          enCola.add(m)
-          if (!enlazar()) { enCola.remove(m); esperando.remove(id)?.resolve(falla("sin_conexion", "No pude conectarme con Hestia Manos.")) }
-        }
+        if (!mandar(m)) esperando.remove(id)?.resolve(falla("sin_conexion", "No pude conectarme con Hestia Manos."))
       }
     }
   }

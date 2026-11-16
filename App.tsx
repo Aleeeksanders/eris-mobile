@@ -52,6 +52,7 @@ import { preloadModuleHtml } from './src/services/ModuleHtml';
 import { tintForTab } from './src/config/moduleTheme';
 import { ErisBubble } from './modules/eris-bubble';
 import { HestiaManos } from './modules/hestia-manos';
+import { pedirLlamada, llamadaAbierta } from './src/services/voz/despertar';
 // Hestia Manos (K0): con la app aparte instalada, Eris anuncia que puede hacer cosas en el teléfono (se revisa en cada conexión)
 setCapsExtra(() => (HestiaManos.disponible() ? ['telefono_ops'] : []));
 import { ApprovalHost } from './src/components/ApprovalHost';
@@ -754,6 +755,24 @@ export default function App() {
       } else if (st === 'background') ErisBubble.setAppForeground(false, getErisBubbleCenter());
     });
     return () => sub.remove();
+  }, [authed, openEris]);
+
+  // K3: la llamada abierta desde Hestia Manos (el botón del asistente, el de los ajustes rápidos, el atajo del ícono), también con
+  // el teléfono bloqueado. Llega con la clave de Eris (la revisa el módulo nativo); se abre el chat y la llamada, como la burbuja.
+  useEffect(() => {
+    if (!authed) return;
+    const tomar = () => {
+      const d = HestiaManos.consumirDespertar();
+      if (!d) return;
+      if (!erisOpenRef.current) setTimeout(() => openEris(), d.bloqueado ? 0 : 250);
+      setTimeout(() => pedirLlamada({ origen: d.origen, bloqueado: d.bloqueado }), d.bloqueado ? 300 : 700);
+      // Nunca dejar Eris sobre la pantalla de bloqueo sin la llamada (si no se abrió: otra cuenta, o falló algo)
+      if (d.bloqueado) setTimeout(() => { if (!llamadaAbierta()) HestiaManos.sobreBloqueo(false); }, 15_000);
+    };
+    tomar();
+    const sub = HestiaManos.onDespertar(tomar);
+    const subApp = AppState.addEventListener('change', (st) => { if (st === 'active') tomar(); });
+    return () => { sub.remove(); subApp.remove(); };
   }, [authed, openEris]);
 
   const closeEris = useCallback(() => {

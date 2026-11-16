@@ -17,6 +17,8 @@ import { setAudioModeAsync } from 'expo-audio';
 import { wsManager } from '../services/WebSocketManager';
 import { Escucha, prepararEscucha, type Preparacion } from '../services/voz/escucha';
 import { Reproductor } from '../services/voz/reproductor';
+import { HestiaManos } from '../../modules/hestia-manos';
+import { marcarLlamada } from '../services/voz/despertar';
 
 type Estado = 'preparando' | 'conectando' | 'escuchando' | 'pensando' | 'hablando' | 'problema';
 const KEEP = 'hestia-llamada';
@@ -24,7 +26,12 @@ const palabras = (t: string) => t.trim().split(/\s+/).filter(Boolean).length;
 
 const C = { fondo: '#07090D', panel: '#10141B', borde: '#1E2530', texto: '#F3F4F6', suave: '#9CA3AF', brasa: '#F59E0B', azul: '#7DD3FC', rojo: '#EF4444' };
 
-export default function HestiaLlamada({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+/**
+ * K3: `origen` = la abrió Hestia Manos (el botón del asistente, los ajustes rápidos, el atajo): sin el saludo del día, va directo a
+ * escucharte. `bloqueado` = el teléfono estaba bloqueado y la llamada se ve sobre la pantalla de bloqueo: Hestia hace solo lo
+ * seguro (lo decide el servidor) hasta que desbloquees; al colgar, Eris vuelve detrás del bloqueo.
+ */
+export default function HestiaLlamada({ visible, onClose, origen, bloqueado }: { visible: boolean; onClose: () => void; origen?: string; bloqueado?: boolean }) {
   const insets = useSafeAreaInsets();
   const [estado, setEstado] = useState<Estado>('preparando');
   const [problema, setProblema] = useState<Extract<Preparacion, { ok: false }> | null>(null);
@@ -36,6 +43,10 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
   const [detalle, setDetalle] = useState<string | null>(null);
   /** J2: una acción en el PC espera tu respuesta (voz = basta decir «sí»; si no, se toca la tarjeta) */
   const [aprobacion, setAprobacion] = useState<{ clase: 'voz' | 'tarjeta' | 'nunca_voz' } | null>(null);
+  /** K3: la llamada corre sobre la pantalla de bloqueo (solo lo seguro hasta desbloquear) */
+  const [bloq, setBloq] = useState(!!bloqueado);
+  const bloqRef = useRef(!!bloqueado);
+  const origenRef = useRef(origen);
 
   const turno = useRef(0);
   const aprobando = useRef(false);
@@ -59,11 +70,26 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  /** K3: desbloqueaste el teléfono: desde ahora Hestia puede todo (y lo que pediste bloqueado sigue solo, en el servidor) */
+  const desbloqueado = useCallback(() => {
+    if (!bloqRef.current) return;
+    bloqRef.current = false;
+    setBloq(false);
+    wsManager.sendMessage({ type: 'voz_desbloqueado' });
+  }, []);
+  const pedirDesbloqueo = useCallback(() => { HestiaManos.pedirDesbloqueo().then((ok) => { if (ok) desbloqueado(); }); }, [desbloqueado]);
+
   useEffect(() => {
     if (!visible) return;
     let vivo = true;
     // J3: «Colgar» desde la notificación de la llamada (con la pantalla apagada o desde otra app)
     const subColgar = ErisBubble.onCallHangup(() => onCloseRef.current());
+    // K3: la llamada está abierta (Hestia Manos suelta el micrófono; App.tsx no esconde Eris del bloqueo) y el desbloqueo
+    marcarLlamada(true);
+    HestiaManos.avisarLlamada('inicio');
+    const subDesbloqueo = HestiaManos.onDesbloqueo(desbloqueado);
+    if (bloqRef.current && !HestiaManos.bloqueado()) bloqRef.current = false; // se desbloqueó mientras abría
+    setBloq(bloqRef.current);
     setEstado('preparando'); setProblema(null); setMio(''); setSuyo(''); setDetalle(null); setAprobacion(null); aprobando.current = false;
     activateKeepAwakeAsync(KEEP).catch(() => {});
     reproductor.current = new Reproductor((h, texto) => {
@@ -102,6 +128,10 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
           break;
         case 'voz_fin':
           if (m.turno === turno.current) { pensando.current = false; if (!hablando.current) setEstado('escuchando'); }
+          break;
+        case 'voz_desbloquear':
+          // K3: pediste algo personal con el teléfono bloqueado: Android muestra el desbloqueo (huella, cara o PIN: lo haces tú)
+          pedirDesbloqueo();
           break;
         case 'voz_error':
           pensando.current = false;
@@ -149,7 +179,8 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
         },
         error: (codigo, mensaje) => { if (codigo !== 'start') return; setSuyo(`No pude escucharte (${mensaje}).`); },
       });
-      wsManager.sendMessage({ type: 'voz_inicio', axs: true });
+      // K3: desde Hestia Manos, sin el saludo del día (la abriste para pedir algo); bloqueado, el servidor solo hace lo seguro
+      wsManager.sendMessage({ type: 'voz_inicio', axs: true, ...(origenRef.current ? { saludo: false } : {}), ...(bloqRef.current ? { bloqueado: true } : {}) });
       escucha.current.iniciar(prep.idioma);
     })();
 
@@ -157,6 +188,11 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
       vivo = false;
       unsub();
       subColgar.remove();
+      subDesbloqueo.remove();
+      // K3: al colgar, Eris NUNCA queda visible sobre la pantalla de bloqueo
+      HestiaManos.sobreBloqueo(false);
+      HestiaManos.avisarLlamada('fin');
+      marcarLlamada(false);
       ErisBubble.stopCall();
       setAudioModeAsync({ shouldPlayInBackground: false }).catch(() => {});
       escucha.current?.detener(); escucha.current = null;
@@ -164,7 +200,7 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
       wsManager.sendMessage({ type: 'voz_colgar' });
       deactivateKeepAwake(KEEP).catch(() => {});
     };
-  }, [visible, interrumpir]);
+  }, [visible, interrumpir, desbloqueado, pedirDesbloqueo]);
 
   const marca: MarkState = estado === 'escuchando' ? 'listening' : estado === 'pensando' ? 'thinking' : estado === 'hablando' ? 'speaking' : estado === 'problema' ? 'offline' : 'idle';
   const rotulo = aprobacion && estado !== 'problema'
@@ -187,6 +223,15 @@ export default function HestiaLlamada({ visible, onClose }: { visible: boolean; 
           <Text style={st.titulo}>HESTIA</Text>
           <Text style={st.sub}>Llamada · solo en tu teléfono y tu PC</Text>
         </View>
+
+        {bloq && (
+          <View style={st.bloq}>
+            <Text style={st.bloqTxt}>Teléfono bloqueado: hago lo básico (alarmas, temporizador, linterna, volumen, música, la hora). Para lo personal, desbloquéalo.</Text>
+            <TouchableOpacity style={st.bloqBtn} onPress={pedirDesbloqueo} accessibilityRole="button" accessibilityLabel="Desbloquear el teléfono">
+              <Text style={st.bloqBtnTxt}>Desbloquear</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <Pressable style={[st.centro, det && st.centroChico]} onPress={interrumpir} accessibilityRole="button" accessibilityLabel="Interrumpir a Hestia">
           <ErisMarkView size={det ? 96 : 190} state={marca} persona="hestia" />
@@ -281,6 +326,10 @@ const st = StyleSheet.create({
   colgar: { flex: 1, backgroundColor: C.rojo, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   colgarTxt: { color: '#fff', fontSize: 14, fontWeight: '800' },
   centroChico: { flex: 0, paddingVertical: 14, gap: 10 },
+  bloq: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, backgroundColor: C.panel, borderColor: C.borde, borderWidth: 1, borderRadius: 14, padding: 12 },
+  bloqTxt: { flex: 1, color: C.suave, fontSize: 12, lineHeight: 17 },
+  bloqBtn: { borderColor: C.brasa, borderWidth: 1, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12 },
+  bloqBtnTxt: { color: C.brasa, fontSize: 13, fontWeight: '700' },
   detalle: { flex: 1, backgroundColor: C.panel, borderColor: C.borde, borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 12, gap: 8 },
   detalleCab: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   detalleTitulo: { color: C.brasa, fontSize: 11, fontWeight: '800', letterSpacing: 2 },

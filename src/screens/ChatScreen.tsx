@@ -23,6 +23,7 @@ import ChatStarters, { placeholderExamples } from '../components/ChatStarters';
 import { AuthStorage } from '../services/AuthStorage';
 import { ModuleStorage } from '../services/ModuleStorage';
 import HestiaLlamada from './HestiaLlamada';
+import { tomarLlamadaPendiente, type OpcionesLlamada } from '../services/voz/despertar';
 
 type Mode = 'auto' | 'flash' | 'deep';
 
@@ -284,15 +285,25 @@ export default function ChatScreen({
   const isAdmin = role === 'ikaros';
   // Hestia por voz (J1): la llamada a pantalla completa
   const [llamada, setLlamada] = useState(false);
+  /** K3: de dónde vino la llamada (Hestia Manos) y si el teléfono está bloqueado */
+  const [llamadaOpts, setLlamadaOpts] = useState<OpcionesLlamada>({});
   // J3: mantener presionada la burbuja de Hestia (fuera de la app) llama, si está en Modo AXS
   const llamarRef = useRef({ axsMode, isAdmin });
   llamarRef.current = { axsMode, isAdmin };
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('HESTIA_LLAMAR', () => {
-      if (llamarRef.current.axsMode && llamarRef.current.isAdmin) setLlamada(true);
+    const sub = DeviceEventEmitter.addListener('HESTIA_LLAMAR', (o?: OpcionesLlamada) => {
+      const { axsMode: axs, isAdmin: admin } = llamarRef.current;
+      // K3: desde Hestia Manos (el botón del asistente) basta tu cuenta de Hestia; la burbuja, en Modo AXS
+      if (o?.origen ? admin : axs && admin) { tomarLlamadaPendiente(); setLlamadaOpts(o ?? {}); setLlamada(true); }
     });
     return () => sub.remove();
   }, []);
+  // K3: pedida antes de que el chat estuviera listo (Eris recién abierta, tu rol todavía cargando)
+  useEffect(() => {
+    if (!isAdmin) return;
+    const p = tomarLlamadaPendiente();
+    if (p?.origen) { setLlamadaOpts(p); setLlamada(true); }
+  }, [isAdmin]);
 
   // Ejemplos del chat vacío y del cuadro de texto: solo de los módulos que usa (paso 4 del plan para hacerla digerible)
   const [usedModules, setUsedModules] = useState({ finanzas: false, toji: false });
@@ -1115,7 +1126,7 @@ export default function ChatScreen({
       </Modal>
 
       {/* Hestia por voz (J1): la llamada; solo se monta mientras está abierta */}
-      {llamada && <HestiaLlamada visible onClose={() => setLlamada(false)} />}
+      {llamada && <HestiaLlamada visible origen={llamadaOpts.origen} bloqueado={llamadaOpts.bloqueado} onClose={() => { setLlamada(false); setLlamadaOpts({}); }} />}
     </View>
   );
 }
