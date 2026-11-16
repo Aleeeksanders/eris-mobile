@@ -18,7 +18,8 @@ export default function ReceiptPhoto({ visible, onClose, onFoto }: { visible: bo
     try {
       const sizes = (await cam.current?.getAvailablePictureSizesAsync()) ?? [];
       const px = (x: string) => { const m = x.match(/(\d+)\s*x\s*(\d+)/i); return m ? Number(m[1]) * Number(m[2]) : 0; };
-      const ok = sizes.filter((x) => px(x) > 0 && px(x) <= 12_600_000).sort((a, b) => px(b) - px(a));
+      // (hasta ~9 MP con calidad 0,8: la foto no pasa del límite del PC, 9 MB)
+      const ok = sizes.filter((x) => px(x) > 0 && px(x) <= 9_000_000).sort((a, b) => px(b) - px(a));
       if (ok[0]) setSize(ok[0]);
     } catch {}
   };
@@ -35,7 +36,8 @@ export default function ReceiptPhoto({ visible, onClose, onFoto }: { visible: bo
     if (sacando || !cam.current) return;
     setSacando(true); setError(null);
     try {
-      const pic = await cam.current.takePictureAsync({ base64: true, quality: 0.5, exif: false });
+      // (calidad 0,8: al 50 % el papel térmico se llenaba de artefactos y el lector leía mal el pie; 2026-11-16, 15 fotos sin cuadrar)
+      const pic = await cam.current.takePictureAsync({ base64: true, quality: 0.8, exif: false });
       if (!pic?.base64) throw new Error('sin foto');
       onFoto({ base64: pic.base64, timbre });
     } catch {

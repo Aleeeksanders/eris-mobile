@@ -392,7 +392,8 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
                 return (
                   <View key={it.i}>
                     <TouchableOpacity onPress={() => set({ sel: f.sel === it.i ? null : it.i, selA: null })} style={s.itemRow} accessibilityRole="button" accessibilityLabel={`Cambiar la categoría de ${it.desc}`}>
-                      <Text style={s.itemD} numberOfLines={1}>{it.desc}{it.cant && it.cant !== 1 ? ` ×${String(it.cant).replace('.', ',')}` : ''}</Text>
+                      {/* con el código de barras, el nombre del envase (no lo que leyó el OCR: «Ceche Pro 1L 5») */}
+                      <Text style={s.itemD} numberOfLines={1}>{(it.ean && porCodigo[it.ean]?.nombre) || it.desc}{it.cant && it.cant !== 1 ? ` ×${String(it.cant).replace('.', ',')}` : ''}</Text>
                       <Text style={[s.itemM, it.estimado ? { color: FX.gold } : null]}>{it.estimado ? '≈ ' : ''}{clp(it.monto)}{it.descuento ? ` (${clp(it.descuento)})` : ''}</Text>
                     </TouchableOpacity>
                     {filaInv(l, it.i, it.desc)}
@@ -410,7 +411,7 @@ Alcancé a leer el timbre: te dejo el total para anotarlo en un gasto.`); onTimb
                 const i = leida.items.length + j, l = lineasSP[j];
                 return (
                   <View key={i}>
-                    <View style={s.itemRow}><Text style={s.itemD} numberOfLines={1}>{sp.desc}{sp.cant && sp.cant !== 1 ? ` ×${sp.cant}` : ''}</Text><Text style={s.itemM}>—</Text></View>
+                    <View style={s.itemRow}><Text style={s.itemD} numberOfLines={1}>{(sp.ean && porCodigo[sp.ean]?.nombre) || sp.desc}{sp.cant && sp.cant !== 1 ? ` ×${sp.cant}` : ''}</Text><Text style={s.itemM}>—</Text></View>
                     {filaInv(l, i, sp.desc)}
                     {pickArea(l, i)}
                   </View>
