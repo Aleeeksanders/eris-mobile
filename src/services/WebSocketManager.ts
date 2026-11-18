@@ -5,7 +5,7 @@ import { AuthStorage } from "./AuthStorage";
 // sin ella el servidor NO ejecuta acciones sensibles (comandos, archivos…) para esta conexión.
 // 'finance_ops' = sabe aplicar en Finanzas lo que Eris anota por chat (FinanceBridge + FinanceHeadlessHost).
 // 'inventory_ops' = sabe aplicar en el Inventario lo que Eris anota por chat (inventoryStore, 2026-10-22).
-const CLIENT_CAPS = ['approvals', 'finance_ops', 'inventory_ops', 'supplement_ops'];
+const CLIENT_CAPS = ['approvals', 'finance_ops', 'inventory_ops', 'supplement_ops', 'forge_ops'];
 // 'telefono_ops' (Hestia Manos, K0) = puede hacer cosas en el teléfono: solo si la app aparte está instalada y firmada igual.
 // Lo decide App.tsx (setCapsExtra) para que este archivo no dependa de módulos nativos (las pruebas lo cargan fuera del teléfono).
 let capsExtra: () => string[] = () => [];

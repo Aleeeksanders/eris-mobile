@@ -154,9 +154,22 @@ export const hhmm = (d: Date) => `${d.getHours()}:${String(d.getMinutes()).padSt
 // ─── El día de comida ─────────────────────────────────────────────
 
 /** Lo que se sabe del sueño: cuándo despertó del sueño principal más reciente y la hora habitual de despertar. */
-export interface DayCtx { wakeAt?: Date | string | null; usualWake?: number | null }
+export interface DayCtx {
+  wakeAt?: Date | string | null; usualWake?: number | null;
+  /**
+   * Cuándo se abrió el día de comida, si no es wakeAt: despertó de madrugada, comió y volvió a dormir (sleepCore.dayOpen). Los
+   * límites del día (qué es de hoy) salen de aquí; el horario de las comidas, de wakeAt. 2026-11-17: con el día desde las 7:25,
+   * el cereal de las 3:13 quedaba en el día de ayer y Métricas mostraba solo el agua.
+   */
+  openAt?: Date | string | null;
+}
 
 const dateOf = (v: Date | string | null | undefined) => { if (!v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
+/** Desde cuándo cuenta el día de comida: openAt si es de esa misma noche (antes del despertar y a menos de 12 h), si no wakeAt */
+const abreDia = (ctx: DayCtx): Date | null => {
+  const w = dateOf(ctx.wakeAt), o = dateOf(ctx.openAt);
+  return o && (!w || (o.getTime() <= w.getTime() && w.getTime() - o.getTime() <= 12 * 3_600_000)) ? o : w;
+};
 
 /** A qué hora parte habitualmente el día de comida (el inicio del desayuno con el despertar habitual; 5:00 si no se sabe). */
 export function dayStartHour(usualWake?: number | null): number {
@@ -178,7 +191,7 @@ function wakeDayOf(wa: Date): Date {
 export function nutritionDayOf(t: Date, ctx: DayCtx = {}): Date {
   const cal = new Date(t);
   cal.setHours(0, 0, 0, 0);
-  const wa = dateOf(ctx.wakeAt);
+  const wa = abreDia(ctx);
   // Ya despertó (antes de t) de un sueño de 3 h o más: el día nuevo empezó. Si fue en la tarde-noche, ese día ya es el de mañana:
   // lo que comas al despertar a las 23:50 no se junta con lo que comiste antes de dormirte.
   if (wa && wa.getTime() <= t.getTime()) {
@@ -202,7 +215,7 @@ export function nutritionDayStart(day: Date, ctx: DayCtx = {}): Date {
   d.setHours(0, 0, 0, 0);
   const start = new Date(d);
   start.setMinutes(Math.round(dayStartHour(ctx.usualWake) * 60));
-  const wa = dateOf(ctx.wakeAt);
+  const wa = abreDia(ctx);
   return wa && wakeDayOf(wa).getTime() === d.getTime() && wa.getTime() < start.getTime() ? wa : start;
 }
 
@@ -219,7 +232,7 @@ export function wakeHourFor(ctx: DayCtx = {}, now: Date = new Date()): number | 
 /** El contexto del día según el snapshot del teléfono (fin del sueño principal y el despertar habitual que calculó). */
 export function dayCtxFrom(snap: any): DayCtx {
   const usual = snap?.schedule?.usualWake;
-  return { wakeAt: snap?.dayWakeTime ?? snap?.wakeTime ?? null, usualWake: okHour(usual) ? usual : null };
+  return { wakeAt: snap?.dayWakeTime ?? snap?.wakeTime ?? null, usualWake: okHour(usual) ? usual : null, openAt: snap?.dayOpenTime ?? null };
 }
 
 /** La hora de despertar de HOY según el snapshot del teléfono (sueño de 3 h o más), o la habitual. */

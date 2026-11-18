@@ -55,6 +55,8 @@ export interface FoodItem {
   liquid?: boolean;
   /** ya lo anotaste antes (sale primero al buscar si es exactamente lo buscado) */
   recent?: boolean;
+  /** lo tienes en casa (Alimentos o Despensa del Inventario): sale antes que todo al buscar */
+  enCasa?: boolean;
   /** de dónde salen sus valores (los registros viejos no lo tienen: ver foodDetail.sourceOf) */
   source?: FoodSource;
   /** alérgenos declarados en el envase (Open Food Facts / base de envasados de Eris) y trazas */
@@ -425,7 +427,50 @@ class FoodSearchService {
   /** Lo que se puede mostrar al instante, sin red: lo ya anotado y la base local (desde la primera letra). */
   async searchQuick(query: string): Promise<FoodItem[]> {
     const [recent, mine] = await Promise.all([this.searchRecent(query), this.searchMine(query)]);
-    return this.merge(query, recent, searchLocalScored(query), [], [], mine);
+    return this.conCasa(query, this.merge(query, recent, searchLocalScored(query), [], [], mine));
+  }
+
+  /**
+   * Lo que tienes en casa (2026-11-17, su pedido: «que priorice lo que tengo en casa, después lo ingerido y después lo natural»):
+   * lo de Alimentos y Despensa del Inventario que calza con lo buscado, con su tabla nutricional SIN red — el producto del
+   * código de barras ya leído, el alimento enlazado o el de la base con ese nombre. Sin tabla nutricional no se ofrece (anotarlo
+   * en 0 kcal sería peor). Va fuera del caché de búsquedas: lo que hay en casa cambia.
+   */
+  async searchCasa(query: string): Promise<FoodItem[]> {
+    if (!normText(query)) return [];
+    let items: any[] = [];
+    try {
+      // require: el Inventario importa este buscador (evita el ciclo)
+      const S = require('./inventory/inventoryStore').inventoryStore.get();
+      items = (S?.items ?? []).filter((i: any) => (i.area === 'alimentos' || i.area === 'despensa') && !i.archivado && Number(i.cantidad) > 0 && i.nombre);
+    } catch {}
+    if (!items.length) return [];
+    const hits = new FoodIndex(items, (it: any) => nameKeys(String(it.nombre)).map((k) => ({ ...k, extra: it.marca })))
+      .search(query, { limit: 8, prefix: true });
+    if (!hits.length) return [];
+    const cache = await this.readBarcodeCache();
+    const out: FoodItem[] = [];
+    for (const h of hits) {
+      const it = h.item;
+      let food: FoodItem | null = it.barcode && cache[it.barcode] ? cache[it.barcode] : null;
+      if (!food && it.foodId) { const lf = localFoods.find((x) => x.id === it.foodId); if (lf) food = localFoodToFoodItem(lf); }
+      if (!food) {
+        // la base con ese nombre: «Manzanas verdes» → «Manzana» (todas las palabras del alimento base están en el nombre)
+        const nombre = normText(it.nombre);
+        const b = searchLocalScored(it.nombre).find((x) => x.exact || normText(x.food.name).split(' ').every((w) => nombre.includes(w.replace(/s$/, ''))));
+        if (b) food = { ...b.food, name: it.nombre, ...(it.marca ? { brand: it.marca } : {}) };
+      }
+      if (food) out.push({ ...food, enCasa: true, recent: undefined });
+    }
+    return out;
+  }
+
+  /** Lo de casa primero, y sin repetirlo más abajo */
+  private async conCasa(query: string, lista: FoodItem[]): Promise<FoodItem[]> {
+    const casa = await this.searchCasa(query).catch(() => [] as FoodItem[]);
+    if (!casa.length) return lista;
+    const ya = new Set(casa.flatMap((f) => [sameKey(f), normText(f.name)]));
+    return [...casa, ...lista.filter((f) => !ya.has(sameKey(f)) && !ya.has(normText(f.name)))];
   }
 
   /** Envasados chilenos del servidor de Eris (con su calce) y la corrección del texto con TODAS sus bases. */
@@ -472,12 +517,12 @@ class FoodSearchService {
     // "Coca-Cola Zero", "coca cola zero " y "COCA COLA ZERO" son la misma búsqueda (y el mismo caché)
     const key = normText(query);
     if (!key) return [];
-    if (this.cache.has(key)) return this.cache.get(key)!;
+    if (this.cache.has(key)) return this.conCasa(query, this.cache.get(key)!);
 
     // 0. Lo que ya anotaste antes y tus versiones — 1. DB local (al instante, sin red)
     const [recent, mine] = await Promise.all([this.searchRecent(query), this.searchMine(query)]);
     const local = searchLocalScored(query);
-    if (!this.wantsNetwork(query)) return this.merge(query, recent, local, [], [], mine);
+    if (!this.wantsNetwork(query)) return this.conCasa(query, this.merge(query, recent, local, [], [], mine));
 
     // 2. Envasados del servidor de Eris y Open Food Facts, en paralelo. A OFF va el texto estándar, corregido contra la
     //    base local ("chocapig" → "chocapic"); si no trae nada y el servidor (que conoce más palabras) lo corrige
@@ -502,7 +547,7 @@ class FoodSearchService {
     const combined = this.merge(query, recent, local, eris?.hits ?? [], r.ok ? rankByText(r.items, want) : [], mine);
     // Si Open Food Facts no respondió, NO se guarda: antes un fallo quedaba como "Sin resultados" toda la sesión
     if (r.ok) this.cache.set(key, combined);
-    return combined;
+    return this.conCasa(query, combined);
   }
 
   /**
@@ -533,9 +578,14 @@ class FoodSearchService {
     [...mine, ...recent].filter((h) => exactly(h.food)).forEach((h) => push(h.food));
     local.filter((h) => h.exact && exactly(h.food)).forEach((h) => push(h.food));
     const adj = (x: Hit & { bonus: number }) => x.score + x.bonus + naturalBoost(query, x.food.name, x.food.brand);
+    // (2026-11-17, su pedido) Después de lo exacto, dos escalones: lo ya anotado, tus versiones y lo natural de la base (sin marca
+    // y sin ser un derivado: manzana, almendras) → el resto de la base y del servidor. Lo de casa va antes de todo (conCasa).
+    // (Lo anotado y lo natural en el MISMO escalón: «manz» sigue dando la fruta antes que la «Manzana Watts» que anotaste,
+    // como pidió el 2026-10-23; dentro del escalón decide el calce, con lo natural +1 y lo anotado +0,5)
+    const escalon = (x: Hit & { src: number }) => (x.src === 0 || naturalBoost(query, x.food.name, x.food.brand) > 0 ? 0 : 1);
     [...mine.map((x) => ({ ...x, src: 0, bonus: 0.5 })), ...recent.map((x) => ({ ...x, src: 0, bonus: 0.5 })),
       ...local.map((x) => ({ ...x, src: 1, bonus: 0 })), ...eris.map((x) => ({ ...x, src: 2, bonus: 0 }))]
-      .sort((a, b) => Number(!!b.exact) - Number(!!a.exact) || adj(b) - adj(a) || a.src - b.src)
+      .sort((a, b) => escalon(a) - escalon(b) || Number(!!b.exact) - Number(!!a.exact) || adj(b) - adj(a) || a.src - b.src)
       .forEach((x) => push(x.food));
     off.forEach(push);
     return out;

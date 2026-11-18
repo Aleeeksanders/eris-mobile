@@ -24,6 +24,8 @@ const okHour = (h: unknown): h is number => typeof h === 'number' && Number.isFi
 
 class DayScheduleStore {
   private wakeAt: string | null = null;
+  /** cuándo se abrió el día de comida, si despertó de madrugada y volvió a dormir (sleepCore.dayOpen) */
+  private openAt: string | null = null;
   private detected: { hour: number; nights: number; day: string; sleepHours?: number } | null = null;
   private manual: number | null = null;
   private hint: number | null = null;
@@ -31,7 +33,7 @@ class DayScheduleStore {
 
   /** Lo que se sabe del sueño (para mealSchedule). */
   ctx(): DayCtx {
-    return { wakeAt: this.wakeAt, usualWake: this.usualWake() };
+    return { wakeAt: this.wakeAt, usualWake: this.usualWake(), openAt: this.openAt };
   }
 
   /** El despertar habitual: el de Perfil si lo fijó; si no, el del reloj; si no, el aproximado de la bienvenida. */
@@ -88,6 +90,14 @@ class DayScheduleStore {
   setWakeAt(iso: string | null | undefined) {
     if (!iso || iso === this.wakeAt) return;
     this.wakeAt = iso;
+    DeviceEventEmitter.emit(DAY_SCHEDULE_EVENT);
+  }
+
+  /** Cuándo se abrió el día de comida (null = el mismo despertar). */
+  setOpenAt(iso: string | null | undefined) {
+    const v = iso ?? null;
+    if (v === this.openAt) return;
+    this.openAt = v;
     DeviceEventEmitter.emit(DAY_SCHEDULE_EVENT);
   }
 

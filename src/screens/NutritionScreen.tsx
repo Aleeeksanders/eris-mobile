@@ -226,6 +226,8 @@ export default function NutritionScreen({ onDataLogged }: Props) {
   const [supSheet, setSupSheet] = useState<SupMode | null>(null);
   // «Ver» en el aviso de un suplemento: abre «Mis suplementos» (revisión I2)
   useEffect(() => escucharDestino('suplementos', () => setSupSheet('mios')), []);
+  // «Hestia, escanea la comida»: el escáner de código de barras, al tiro
+  useEffect(() => escucharDestino('escanear_comida', () => { setBarcodeError(null); setShowScanner(true); }), []);
   const undoSnackAnim = useRef(new Animated.Value(0)).current;
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (undoTimerRef.current) clearTimeout(undoTimerRef.current); }, []);
@@ -1221,7 +1223,7 @@ export default function NutritionScreen({ onDataLogged }: Props) {
                     <View style={s.resultLeft}>
                       <Text style={s.resultName}>{item.name}</Text>
                       {item.brand && <Text style={s.resultBrand}>{item.brand}</Text>}
-                      {item.mine ? <Text style={s.resultRecent}>Tu versión</Text> : item.recent && <Text style={s.resultRecent}>Ya lo anotaste antes</Text>}
+                      {item.enCasa ? <Text style={s.resultRecent}>En casa</Text> : item.mine ? <Text style={s.resultRecent}>Tu versión</Text> : item.recent && <Text style={s.resultRecent}>Ya lo anotaste antes</Text>}
                       {item.servings.length > 0 && (
                         <Text style={s.resultServing}>
                           Porción: {item.servings[0].description}

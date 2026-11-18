@@ -24,6 +24,7 @@ import { PROFILE_CHANGED_EVENT } from '../ScopedStorage';
 import { AuthStorage } from '../AuthStorage';
 import { financeCuadre } from './financeCuadre';
 import { modulosOn } from '../modulosOn';
+import { cargoRaro, type CargoRaro } from './cargoRaro';
 
 const CFG_KEY = 'finance_auto_v1';
 const LOG_KEY = 'finance_auto_log_v1';
@@ -222,6 +223,22 @@ export const financeAuto = {
       // require: ErisNotifications importa el WS y la persona (evita el ciclo con las pantallas)
       try { await require('../ErisNotifications').erisNotifications.financeAuto(hechos); } catch {}
     }
+    // Hestia (L2): las compras fuera de lo común («¿lo reconoces?»): solo si Hestia está activa en este teléfono (avisos.ts)
+    try {
+      const S = financeStore.get();
+      const raros: CargoRaro[] = [];
+      for (const h of hechos) {
+        if (h.p.tipo !== 'compra' || (h.como && h.como !== 'gasto')) continue;
+        const razon = cargoRaro({ monto: h.monto, desc: h.desc }, S, h.txId);
+        if (razon) raros.push({ id: h.clave, txId: h.txId, monto: h.monto, comercio: h.desc, razon, porConfirmar: false });
+      }
+      for (const p of props) {
+        if (p.tipo !== 'compra') continue;
+        const razon = cargoRaro({ monto: p.monto, desc: p.desc, comercio: p.comercio }, S);
+        if (razon) raros.push({ id: p.clave, txId: null, monto: p.monto, comercio: p.desc || p.comercio || 'un comercio', razon, porConfirmar: true });
+      }
+      if (raros.length) await require('../hestia/avisos').avisarCargos(raros);
+    } catch {}
     // El cuadre con lo que dijo el banco (arregla solo lo exacto si Eris anota sola; si no, avisa una vez al día)
     if (lecturas.length) {
       for (const l of lecturas) await financeCuadre.registrarSaldo(l.ref, l.saldo, l.at, 'aviso').catch(() => null);

@@ -7,7 +7,10 @@
 // ============================================================
 import { DeviceEventEmitter } from 'react-native';
 
-export type Destino = 'suplementos' | 'entreno_hora';
+/** (y el escáner por voz, 2026-11-17: «Hestia, escanea el código de barras» → la cámara de comida, gastos o inventario) */
+export type Destino = 'suplementos' | 'entreno_hora' | 'escanear_comida' | 'escanear_gasto' | 'escanear_inventario';
+/** Hestia pidió abrir un escáner (lo atiende App: abre el módulo y deja el destino) */
+export const ABRIR_ESCANER_EVENT = 'eris_abrir_escaner';
 export const NOTIF_TARGET_EVENT = 'eris_notif_target';
 
 const pendientes = new Set<Destino>();

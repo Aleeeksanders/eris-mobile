@@ -8,7 +8,7 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const EASE_OPEN = Easing.bezier(0.2, 0, 0, 1);
 const EASE_CLOSE = Easing.bezier(0.3, 0, 0.8, 0.15);
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
-import { pedirDestino } from './src/services/notifTargets';
+import { pedirDestino, ABRIR_ESCANER_EVENT } from './src/services/notifTargets';
 import { modulosOn, respuestaApagado } from './src/services/modulosOn';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -52,6 +52,11 @@ import { preloadModuleHtml } from './src/services/ModuleHtml';
 import { tintForTab } from './src/config/moduleTheme';
 import { ErisBubble } from './modules/eris-bubble';
 import { HestiaManos } from './modules/hestia-manos';
+import { iniciarPresencia, detenerPresencia } from './src/services/hestia/presencia';
+import { decirHestia } from './src/services/hestia/altavoz';
+import { aplicarForgeOp } from './src/services/forge/forgeVoz';
+import { forgeStore } from './src/services/forge/forgeStore';
+import { restTimer } from './src/services/forge/restTimer';
 import { pedirLlamada, llamadaAbierta } from './src/services/voz/despertar';
 // Hestia Manos (K0): con la app aparte instalada, Eris anuncia que puede hacer cosas en el teléfono (se revisa en cada conexión)
 setCapsExtra(() => (HestiaManos.disponible() ? ['telefono_ops'] : []));
@@ -399,6 +404,38 @@ export default function App() {
           .catch((e) => ({ ok: false, code: 'error', msg: `Inventario no pudo: ${String(e?.message ?? e)}` }))
           .then((result) => { wsManager.sendMessage({ type: 'inventory_op_result', requestId: data.requestId, result }); });
       }
+      // Hestia como JARVIS · L3: el entrenador en el oído. Lo que Hestia pide a Forge en la llamada («hice 8 con 62,5», qué sigue,
+      // el descanso) se aplica con el mismo núcleo de Entrenar y vuelve lo que de verdad quedó (forgeVoz.ts)
+      if (data.type === 'forge_op' && data.requestId) {
+        const responder = (result: unknown) => wsManager.sendMessage({ type: 'forge_op_result', requestId: data.requestId, result });
+        if (!modulosOn.on('toji')) { responder(respuestaApagado('Forge')); return; }
+        aplicarForgeOp(data.op, { store: forgeStore, reloj: restTimer })
+          .catch((e) => ({ ok: false, code: 'error', msg: `Forge no pudo: ${String(e?.message ?? e)}` }))
+          .then(responder);
+      }
+      // Hestia como JARVIS · L0: el vigía del PC avisa (RAM, disco, temperatura) — el servidor solo se lo manda a Ikaros
+      if (data.type === 'hestia_alerta' && typeof data.texto === 'string') {
+        erisNotifications.hestiaEquipo({ texto: data.texto, nivel: String(data.nivel ?? 'aviso'), clave: String(data.clave ?? 'equipo') }).catch(() => {});
+      }
+      // L1 (C3): Hestia te habla sin la llamada (el servidor ya vio que tienes audífonos y que puede). Si no suena, queda escrito.
+      if (data.type === 'hestia_decir' && typeof data.texto === 'string') {
+        // (L2: lo escrito puede ser distinto de lo dicho: el cargo con su monto aunque no se diga en voz alta)
+        const aviso = { titulo: String(data.titulo ?? 'Hestia'), texto: String(data.escrito ?? data.texto), clave: String(data.clave ?? 'aviso') };
+        decirHestia({ wav: String(data.wav ?? ''), texto: String(data.texto) }).then((ok) => {
+          // L2: el cargo queda siempre con sus botones (para contestarlo); una llamada que no se pudo decir, nada (ya suena)
+          if (data.botones === 'cargo') erisNotifications.hestiaCargo({ ...aviso, datos: data.datos ?? {} }).catch(() => {});
+          else if (!ok) { if (data.soloVoz !== true) erisNotifications.hestiaAviso(aviso).catch(() => {}); }
+          else if (data.nota === true) erisNotifications.hestiaEquipo({ texto: aviso.texto, nivel: 'aviso', clave: aviso.clave }).catch(() => {});
+        });
+      }
+      // …y lo que no pudo decirte en voz alta (sin audífonos, «no molestar», una reunión, de noche): la bienvenida a casa…
+      if (data.type === 'hestia_aviso' && typeof data.texto === 'string') {
+        const aviso = { titulo: String(data.titulo ?? 'Hestia'), texto: String(data.texto), clave: String(data.clave ?? 'aviso') };
+        if (data.botones === 'cargo') erisNotifications.hestiaCargo({ ...aviso, datos: data.datos ?? {} }).catch(() => {});
+        else erisNotifications.hestiaAviso(aviso).catch(() => {});
+      }
+      // L2: contestaste el cargo por voz en la llamada («sí, era yo»): la notificación ya no hace falta
+      if (data.type === 'hestia_cargo_resp' && data.era === true && data.id) erisNotifications.cerrarCargo(String(data.id));
       // Hestia Manos (K0): lo que Hestia hace en el teléfono (alarma, linterna, abrir una app…) lo hace la app aparte;
       // acá solo se reenvía y vuelve el resultado real. Las aprobaciones ya las pidió el servidor.
       if (data.type === 'telefono_op' && data.requestId) {
@@ -668,6 +705,10 @@ export default function App() {
       if (nutricion) pedirDestino('suplementos');
       return;
     }
+    // El escáner por voz (Hestia, 2026-11-17): comida → Nutrición, gastos → la foto de la boleta, inventario → agregar con el escáner
+    if (o.action === 'escaner_comida') { cerrarCapas(); ir(nutricion ?? inicio); if (nutricion) pedirDestino('escanear_comida'); return; }
+    if (o.action === 'escaner_gastos') { cerrarCapas(); setWalletMounted(true); setWalletPhase((p) => (p === 'hidden' || p === 'exiting' ? 'entering' : p)); pedirDestino('escanear_gasto'); return; }
+    if (o.action === 'escaner_inventario') { cerrarCapas(); setInvMounted(true); setInvPhase((p) => (p === 'hidden' || p === 'exiting' ? 'entering' : p)); pedirDestino('escanear_inventario'); return; }
     if (o.action === 'intent_hora') {
       // La tarjeta «¿Entrenas hoy?» abre directo en la hora; está en Forge → Hoy (y en Inicio)
       cerrarCapas();
@@ -689,7 +730,11 @@ export default function App() {
     const sub = DeviceEventEmitter.addListener(NOTIFICATION_OPEN_EVENT, handleNotificationOpen);
     // Cualquier pantalla puede abrir el chat con una pregunta lista ("Díselo a Eris" en el buscador de Nutrición)
     const ask = DeviceEventEmitter.addListener(ERIS_ASK_EVENT, (msg: string) => { if (typeof msg === 'string' && msg.trim()) openEris(msg); });
-    return () => { sub.remove(); ask.remove(); };
+    // Hestia pidió abrir un escáner (la llamada ya colgó)
+    const esc = DeviceEventEmitter.addListener(ABRIR_ESCANER_EVENT, (que: string) => {
+      if (que === 'comida' || que === 'gastos' || que === 'inventario') handleNotificationOpen({ action: `escaner_${que}` } as NotificationOpen);
+    });
+    return () => { sub.remove(); ask.remove(); esc.remove(); };
   }, [handleNotificationOpen, openEris]);
   // La app estaba cerrada y se abrió desde una notificación: se atiende cuando ya hay sesión y terminó el portal
   useEffect(() => {
@@ -703,6 +748,19 @@ export default function App() {
     PersonaStore.set(axsMode ? 'hestia' : 'eris');
     AppModeStore.set(axsMode && enterprise ? 'empresa' : axsMode ? 'hestia' : 'eris');
   }, [axsMode, enterprise]);
+
+  // Hestia como JARVIS · C4 (L1): los sensores del teléfono (audífonos, red de la casa, «no molestar»), solo Ikaros en Modo AXS y con
+  // Hestia Manos. En Eris (o con otra cuenta) no corre nada de esto.
+  useEffect(() => {
+    if (!authed) { detenerPresencia(); return; }
+    const decide = () => {
+      const esIkaros = wsManager.getLastConnectedPayload()?.role === 'ikaros';
+      if (axsMode && esIkaros && HestiaManos.disponible()) iniciarPresencia(); else detenerPresencia();
+    };
+    decide();
+    const off = wsManager.subscribeMessage((d: any) => { if (d?.type === 'connected') decide(); });
+    return () => { off(); };
+  }, [authed, axsMode]);
 
   // Eris · Hestia · Empresa desde el Dashboard (ModeSwitch). Hestia y Empresa solo para administradores.
   useEffect(() => {

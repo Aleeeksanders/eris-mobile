@@ -17,6 +17,7 @@ import { wsManager } from '../services/WebSocketManager';
 import { AuthStorage } from '../services/AuthStorage';
 import ModeSwitch from '../components/ModeSwitch';
 import { AdminPanel } from './AdminPanel';
+import { HestiaControl } from './HestiaControl';
 
 const BLUE = '#3b82f6';
 const AMBER = '#f59e0b';
@@ -407,6 +408,8 @@ export function EnterpriseSystem() {
   const level = (p: number) => (p > 85 ? T.red : p > 65 ? AMBER : T.green);
   return (
     <Screen eyebrow="AXS · PC" title="Sistema" refreshing={loading && !!state} onRefresh={refresh}>
+      {/* Hestia como JARVIS · L0: su estado, la pausa, el equipo medido y los límites (solo Hestia) */}
+      <HestiaControl />
       {!sys && <Status state={state} loading={loading} />}
       {sys && (
         <>

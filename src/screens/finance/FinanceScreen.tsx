@@ -6,6 +6,7 @@
 // Secciones: Hoy · Movimientos · Cuentas · Plan · Análisis; el botón «+ Anotar» para todo lo que se anota; ? (guía) y ⚙.
 // ============================================================
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { escucharDestino } from '../../services/notifTargets';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, StatusBar, BackHandler, ActivityIndicator, Animated, DeviceEventEmitter, Alert } from 'react-native';
 import { listFinanceBackups, restoreFinanceBackup, fechaHora, RESTORE_OFFER_EVENT, type BackupCopy } from '../../services/financeBackup';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -125,6 +126,8 @@ function NativeFinance({ onExit, active }: { onExit?: () => void; active: boolea
   }, [showToast]);
 
   const irA = useCallback((sec: Seccion) => { setTab(sec); scroll.current?.scrollTo({ y: 0, animated: false }); }, []);
+  // «Hestia, escanea la boleta»: la foto de la boleta, con la cámara abierta al tiro
+  useEffect(() => escucharDestino('escanear_gasto', () => { irA('hoy'); setSheet({ k: 'gasto', foto: true }); }), [irA]);
 
   // Los fijos que ya llegaron a su día se anotan al entrar (como hacía la web)
   useEffect(() => {

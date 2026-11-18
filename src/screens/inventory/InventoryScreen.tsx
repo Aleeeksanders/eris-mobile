@@ -4,6 +4,7 @@
 // ? (guía) y ⚙ (áreas, respaldo). Las reglas viven en services/inventory/inventoryCore.ts (las mismas que usa el chat).
 // ============================================================
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { escucharDestino } from '../../services/notifTargets';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, StatusBar, BackHandler, ActivityIndicator, Animated, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -44,6 +45,8 @@ export default function InventoryScreen({ onExit, active = true, onReadyChange }
   const fade = useRef(new Animated.Value(0)).current;
   const scroll = useRef<ScrollView>(null);
   const readyRef = useRef(onReadyChange); readyRef.current = onReadyChange;
+  // «Hestia, escanea un producto para la despensa»: agregar, con el escáner abierto
+  useEffect(() => escucharDestino('escanear_inventario', () => { setTab('hoy'); setSheet({ k: 'agregar', preset: { barcode: '__scan__' } } as SheetState); }), []);
 
   useEffect(() => { if (S) readyRef.current?.(true); }, [!!S]);
   // Al abrir: lo que comiste y las tomas del día, al tiro (también corre solo en segundo plano)

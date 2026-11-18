@@ -227,6 +227,8 @@ export interface HealthSnapshot {
    * larga no lo reinicia). Lo usan la app y el servidor (services/mealSchedule.ts).
    */
   dayWakeTime?: string;
+  /** cuándo se abrió el día de comida (sleepCore.dayOpen; null = el mismo dayWakeTime) */
+  dayOpenTime?: string | null;
   /** Sueño 2.0 · S1: las 2 semanas de sueño (deuda, regularidad, cronotipo, puntaje de la noche y hora para acostarse) */
   sleepInsights?: SleepInsights;
   /** el plan de sueño en curso (pantalla de Sueño): la meta y cómo va, para el chat y la semana (Sueño 2.0 · S3) */
@@ -583,6 +585,9 @@ class MetricsService {
           if (day.dayWake) {
             snapshot.dayWakeTime = day.dayWake;
             daySchedule.setWakeAt(day.dayWake);
+            // (siempre, también null: el servidor mezcla los snapshots y uno viejo quedaría pegado)
+            snapshot.dayOpenTime = day.dayOpen && day.dayOpen !== day.dayWake ? day.dayOpen : null;
+            daySchedule.setOpenAt(snapshot.dayOpenTime);
             // Pasos y actividad: desde que terminó la noche, dentro del día de comida (diaActivo, más abajo)
           }
         }
@@ -596,7 +601,7 @@ class MetricsService {
       // Pasos, distancia, calorías activas, ejercicio y la actividad del reloj: el MISMO día que la comida, hasta que te
       // duermes (pedido del usuario, 2026-11-05). Antes se cortaban a medianoche: a la 1:30 sin dormir lo comido iba a ayer
       // y lo gastado partía de cero (services/activityDay.ts).
-      const activo = diaActivo(now, dctx, snapshot.dayWakeTime ?? null);
+      const activo = diaActivo(now, dctx, snapshot.dayOpenTime ?? snapshot.dayWakeTime ?? null);
       dayBoundary = activo.desde;
 
       // Lo que sigue es independiente entre sí: se pide en paralelo. Antes eran 14 llamadas nativas una tras otra y el

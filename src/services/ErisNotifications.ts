@@ -17,12 +17,26 @@ import { PersonaStore, personaName } from '../config/persona';
 import { plainPreview, glucoseCopy, COLORS } from './notificationCopy';
 import { DEFAULT_REMINDER_SETTINGS, type PlannedReminder, type ReminderSettings } from './reminderRules';
 
-type Kind = 'glucose_urgent' | 'glucose' | 'reply' | 'tip' | 'approval' | 'meal' | 'water' | 'training' | 'finance' | 'summary' | 'supplement' | 'sleep' | 'focus' | 'finance_auto' | 'rest';
+type Kind = 'glucose_urgent' | 'glucose' | 'reply' | 'tip' | 'approval' | 'meal' | 'water' | 'training' | 'finance' | 'summary' | 'supplement' | 'sleep' | 'focus' | 'finance_auto' | 'rest' | 'hestia' | 'hestia_aviso';
 
 const { AndroidImportance, AndroidNotificationVisibility } = Notifications;
 
 /** Canales de Android: nombre y descripción los ve el usuario en Ajustes → Notificaciones de Eris. */
 const CHANNELS: Record<Kind, Notifications.NotificationChannelInput & { id: string }> = {
+  // Hestia como JARVIS · L0 (2026-11-17): el equipo al límite (RAM, disco, temperatura) y lo que Hestia hizo para protegerlo.
+  // Solo llega a la cuenta de Ikaros (el servidor no se lo manda a nadie más)
+  hestia: {
+    id: 'hestia-equipo', name: 'Hestia · equipo', description: 'Cuando tu PC está al límite (RAM, disco, temperatura) y lo que hizo Hestia para cuidarlo.',
+    importance: AndroidImportance.HIGH, vibrationPattern: [0, 200, 120, 200], lightColor: '#F59E0B',
+    lockscreenVisibility: AndroidNotificationVisibility.PRIVATE, enableVibrate: true,
+  },
+  // Hestia como JARVIS · L1 (2026-11-17): lo que Hestia te habría dicho en voz alta y no pudo (sin audífonos, «no molestar», una
+  // reunión, de noche): la bienvenida a casa y otros avisos. Sin sonido: se lee cuando mires. Solo Ikaros.
+  hestia_aviso: {
+    id: 'hestia-avisos', name: 'Hestia · avisos', description: 'Lo que Hestia te diría en voz alta cuando no puede hablarte (sin audífonos, en una reunión o de noche).',
+    importance: AndroidImportance.DEFAULT, lightColor: '#F59E0B', sound: null, enableVibrate: false,
+    lockscreenVisibility: AndroidNotificationVisibility.PRIVATE,
+  },
   // Fin del descanso en Forge (2026-11-05): vibra y se ve con la pantalla bloqueada, sin sonido para no cortar la música
   rest: {
     id: 'eris-forge-descanso', name: 'Descanso entre series', description: 'Vibra cuando se acaba tu descanso en Forge. Sin sonido, para no cortar tu música.',
@@ -119,8 +133,11 @@ const CATEGORY_IDS: Record<string, string> = {
   intent: 'eris-entreno-hoy', supplement: 'eris-suplemento', plan_meal: 'eris-plan-comida', plan_cue: 'eris-plan-paso',
   fin_auto: 'eris-fin-auto', fin_auto_varios: 'eris-fin-auto-varios', fin_auto_abono: 'eris-fin-auto-abono', fin_auto_compra: 'eris-fin-auto-compra',
   fin_cuadre: 'eris-fin-cuadre', fin_cuadre_ver: 'eris-fin-cuadre-ver', fin_cuadre_hecho: 'eris-fin-cuadre-hecho',
+  hestia_cargo: 'hestia-cargo',
 };
 const PENDING_WATER_KEY = 'eris_pending_water_quick';
+/** L2: la notificación de un cargo (una por aviso del banco) */
+const idCargo = (id: unknown) => `hestia-cargo-${String(id ?? '').replace(/[^\w-]/g, '').slice(0, 80)}`;
 /** «Rechazar» tocado sin conexión: se manda al volver (revisión I1) */
 const PENDING_REJECT_KEY = 'eris_notif_pending_reject';
 /** El resumen del domingo (A3): uno solo, se reprograma */
@@ -210,6 +227,8 @@ class ErisNotificationsService {
         [CATEGORY_IDS.fin_cuadre, [['cuadre_arreglar', 'Arreglar', false], ['cuadre_ver', 'Ver', true]]],
         [CATEGORY_IDS.fin_cuadre_ver, [['cuadre_ver', 'Ver', true]]],
         [CATEGORY_IDS.fin_cuadre_hecho, [['cuadre_deshacer', 'Deshacer', false], ['cuadre_ver', 'Ver', true]]],
+        // Hestia (L2): un cargo del banco fuera de lo común. «Sí, era yo» sin abrir la app; «No, revisar» abre el movimiento
+        [CATEGORY_IDS.hestia_cargo, [['cargo_si', 'Sí, era yo', false], ['cargo_no', 'No, revisar', true]]],
       ];
       for (const [id, actions] of cats) {
         await Notifications.setNotificationCategoryAsync(id, actions.map(([identifier, buttonTitle, open]) => (
@@ -252,6 +271,7 @@ class ErisNotificationsService {
       // entrega al abrir y acá no estaban): se hacen igual que con la app abierta, una sola vez
       if (resp.actionIdentifier === 'plan_comi' || resp.actionIdentifier === 'plan_hecho') { this.quickPlanMeal(resp).catch(() => {}); return null; }
       if (resp.actionIdentifier === 'rechazar' && (resp.notification.request.content.data as any)?.kind === 'approval') { this.quickReject(resp).catch(() => {}); return null; }
+      if (resp.actionIdentifier === 'cargo_si') { Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {}); return null; }
       this.financeOpen(resp);
       return this.toOpen(resp);
     } catch { return null; }
@@ -382,6 +402,12 @@ class ErisNotificationsService {
   /** «Cambiar» o tocar el aviso de lo que Eris anotó: Finanzas abre ese movimiento */
   private financeOpen(resp: Notifications.NotificationResponse) {
     const data = (resp.notification.request.content.data ?? {}) as any;
+    // Hestia (L2): «No, revisar» (o tocar el aviso del cargo) abre ese movimiento en Finanzas
+    if (data.cargo) {
+      Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {});
+      if (data.txId != null) { try { require('./finance/financeAuto').financeAuto.openTx(data.txId); } catch {} }
+      return;
+    }
     if (data.cuadre) {
       Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {});
       try { require('./finance/financeCuadre').financeCuadre.abrir(data.ref ?? null); } catch {}
@@ -529,6 +555,12 @@ class ErisNotificationsService {
       this.quickFinanceUndo(resp).catch(() => {});
       return;
     }
+    // Hestia (L2): «Sí, era yo»: el cargo queda como está (y la notificación se va)
+    if (resp.actionIdentifier === 'cargo_si') {
+      try { Notifications.clearLastNotificationResponse(); } catch {}
+      Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {});
+      return;
+    }
     this.financeOpen(resp);
     if (String(resp.notification.request.identifier).startsWith(SUP_PREFIX)) {
       Notifications.dismissNotificationAsync(resp.notification.request.identifier).catch(() => {});
@@ -575,6 +607,31 @@ class ErisNotificationsService {
         trigger: Platform.OS === 'android' ? { channelId: CHANNELS[kind].id } : null,
       });
     } catch { return null; }
+  }
+
+  /** Hestia · equipo (L0): un aviso del vigía del PC. Uno por límite: el siguiente del mismo reemplaza al anterior */
+  async hestiaEquipo(a: { texto: string; nivel: string; clave: string }) {
+    const titulo = a.nivel === 'vuelve' ? 'Hestia · todo bien de nuevo' : a.nivel === 'accion' ? 'Hestia cuidó el equipo' : 'Hestia · ojo con el PC';
+    await this.show('hestia', { title: titulo, body: a.texto, color: '#F59E0B', sound: a.nivel === 'accion', data: { tap: 'home' } }, `hestia-equipo-${a.clave}`);
+  }
+
+  /**
+   * L2: «¿Reconoces este cargo?» con «Sí, era yo» (sin abrir la app) y «No, revisar» (abre el movimiento). Con sonido suave:
+   * es plata que salió. Una por aviso del banco; si lo contestaste por voz, se quita (cerrarCargo).
+   */
+  async hestiaCargo(a: { titulo: string; texto: string; clave: string; datos?: { id?: string; txId?: unknown; porConfirmar?: boolean } }) {
+    await this.show('hestia_aviso', {
+      title: a.titulo || '¿Reconoces este cargo?', body: a.texto, color: '#F59E0B', sound: true, categoryIdentifier: CATEGORY_IDS.hestia_cargo,
+      data: { tap: 'finanzas', cargo: true, txId: a.datos?.txId ?? null, id: a.datos?.id ?? null },
+    }, idCargo(a.datos?.id ?? a.clave));
+  }
+
+  /** L2: contestaste el cargo por voz en la llamada: la notificación ya no hace falta */
+  cerrarCargo(id: string) { Notifications.dismissNotificationAsync(idCargo(id)).catch(() => {}); }
+
+  /** L1: un aviso de Hestia que no se pudo decir en voz alta (la bienvenida a casa…) */
+  async hestiaAviso(a: { titulo: string; texto: string; clave: string }) {
+    await this.show('hestia_aviso', { title: a.titulo || 'Hestia', body: a.texto, color: '#F59E0B', sound: false, data: { tap: 'home' } }, `hestia-aviso-${a.clave}`);
   }
 
   /** Alerta de glucosa del sensor: reemplaza la anterior (no se apilan) y ofrece pedirle ayuda a Eris. */

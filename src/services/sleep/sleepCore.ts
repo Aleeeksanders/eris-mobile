@@ -46,8 +46,13 @@ export interface SleepDay {
   totalH: number;
   /** dormido en la noche: la calidad y el horario */
   nightH: number | null;
-  /** fin de la noche: ahí empieza el día */
+  /** fin de la noche: ahí empieza el día (el horario de comidas y el ritmo del agua parten de aquí) */
   dayWake: string | null;
+  /**
+   * cuándo se abrió el día de COMIDA: el primer despertar de la noche. Casi siempre es dayWake; distinto si despertó de
+   * madrugada y volvió a dormir (2026-11-17: despertó 02:28, comió 03:13, durmió de 06:32 a 07:25: lo de las 3:13 es de hoy)
+   */
+  dayOpen: string | null;
   /** el último despertar (de la noche, una siesta o un segundo sueño) */
   lastWake: string | null;
   /** noche con un rato despierto largo (30 min o más) o con un segundo sueño ese día */
@@ -230,16 +235,25 @@ export function sleepDay(sessions: RawSession[], o: SleepOpts = {}): SleepDay | 
   // Un sueño largo a hora rara: abre el día si dijiste «parto mi día», o si pasaron 8 h sin volver a dormir largo. Mientras no se
   // sepa, y con «vuelvo a dormir», es un sueño extra: el día sigue contado desde el despertar anterior.
   const odd = !!night && night.asleepMin >= LONG_MIN && wakeIsOdd(night.end, o);
+  // 2026-11-17: durmió de 21:10 a 02:28, estuvo en pie, volvió a dormir de 06:32 a 07:25 y a las 7:30 tocó «Parto mi día
+  // ahora»: el día quedó desde las 02:28 y lo de 06:32 como siesta. Una noche que termina de madrugada (antes de su rango de
+  // despertar) y que sigue, dentro de 6 h, con otro sueño que ya termina en su rango de despertar: la noche siguió ahí. Ese sueño
+  // es el «segundo» de la noche, el día parte cuando termina y no hace falta preguntar.
+  const madrugada = !!night && odd && hourOf(night.end) < w.wakeFrom && hourOf(night.end) < EVENING_END_H;
+  const siguio = madrugada
+    ? eps.filter((e) => e.start >= night!.end && e.start - night!.end <= 6 * H && e.asleepMin >= 20 && inWakeRange(e.end, w))
+      .reduce<Ep | null>((a, b) => (!a || b.end > a.end ? b : a), null)
+    : null;
   const endIso = night ? new Date(night.end).toISOString() : '';
-  const said = odd ? o.decisions?.[endIso] : undefined;
+  const said = odd && !siguio ? o.decisions?.[endIso] : undefined;
   const waited = !night || o.now == null || o.now - night.end >= WAKE_WAIT_H * H;
-  const extra = odd && (said === 'dormir' || (!said && !waited));
-  const anchor = extra ? (pick && pick !== night ? pick : null) : night;
+  const extra = odd && !siguio && (said === 'dormir' || (!said && !waited));
+  const anchor = siguio ?? (extra ? (pick && pick !== night ? pick : null) : night);
   // Lo del día: la noche, lo que vino después y lo que cuenta a ese mismo día; sin noche, lo de las últimas 24 h
   const lastEnd = eps[eps.length - 1].end;
   const nightDay = night ? epDay(night) : null;
   const day = night ? eps.filter((e) => e.start >= night.start || epDay(e) === nightDay) : eps.filter((e) => e.end > lastEnd - 24 * H);
-  const episodes = day.map((e) => toEpisode(e, e === night && !extra ? 'noche' : kindOf(e)));
+  const episodes = day.map((e) => toEpisode(e, e === night && !extra ? 'noche' : e === siguio ? 'segundo' : kindOf(e)));
   const totalMin = day.reduce((a, e) => a + e.asleepMin, 0);
   const staged = episodes.filter((e) => e.stages);
   const stages = staged.length
@@ -250,6 +264,7 @@ export function sleepDay(sessions: RawSession[], o: SleepOpts = {}): SleepDay | 
   return {
     episodes, night: n, totalH: r2(totalMin / 60), nightH: n ? n.asleepH : null,
     dayWake: anchor ? new Date(anchor.end).toISOString() : null, lastWake: new Date(day[day.length - 1].end).toISOString(),
+    dayOpen: siguio ? new Date(night!.end).toISOString() : anchor ? new Date(anchor.end).toISOString() : null,
     // «Partida» solo si la noche de verdad se cortó: despierto en medio, o una noche corta que siguió en otro sueño. Dormir bien de
     // noche y otro rato después no es una noche partida.
     split: !!n && (n.awakeMin >= 30 || (n.asleepH < 6 && episodes.some((e) => e.kind === 'segundo'))),

@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- Hestia Manos (K0): la app aparte que le da a Hestia las manos en el teléfono. Solo se ve si está instalada; Eris se enlaza
        a su servicio y le pasa los pedidos del servidor. Sin ella, Eris no anuncia «telefono_ops» y nada de esto existe. -->
+  <!-- L1 (C4): saber cuándo cambia la red, para revisar si el teléfono alcanza al PC por la red de la casa (sin ubicación) -->
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <queries>
     <package android:name="com.aleeeksanders.hestiamanos" />
   </queries>
